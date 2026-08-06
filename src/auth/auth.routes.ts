@@ -3,6 +3,7 @@ import { registerUser, loginUser, logoutUser } from './auth.controller';
 
 const router = Router();
 
+//test
 router.post('/register', registerUser);
 router.post('/login', loginUser);
 router.post('/logout', logoutUser);
