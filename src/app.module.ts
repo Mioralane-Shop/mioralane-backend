@@ -6,7 +6,18 @@ const createApp = (): express.Application => {
   const app = express();
 
   // Middlewares
-  app.use(cors({ origin: true, credentials: true }));
+  app.use(
+    cors({
+      origin: '*', // Allow all origins for now (testing)
+      credentials: true,
+      methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+      allowedHeaders: ['Content-Type', 'Authorization'],
+    })
+  );
+
+  // Pre-flight OPTIONS requests
+  app.options('*', cors());
+
   app.use(express.json());
 
   // Routes
