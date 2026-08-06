@@ -15,9 +15,6 @@ const createApp = (): express.Application => {
     })
   );
 
-  // Pre-flight OPTIONS requests
-  app.options('*', cors());
-
   app.use(express.json());
 
   // Routes
