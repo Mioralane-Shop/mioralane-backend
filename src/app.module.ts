@@ -9,10 +9,14 @@ import { swaggerSpec, swaggerServe, swaggerSetup } from './swagger';
 const createApp = (): express.Application => {
   const app = express();
 
-  // Middlewares
+  // Middlewares — CORS must be first
   app.use(
     cors({
-      origin: process.env.CLIENT_URL || 'http://localhost:3000',
+      origin: [
+        'https://mioralane.com',
+        'https://www.mioralane.com',
+        'http://localhost:3000',
+      ],
       credentials: true,
       methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
       allowedHeaders: ['Content-Type', 'Authorization'],
