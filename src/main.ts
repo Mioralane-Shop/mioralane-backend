@@ -1,6 +1,4 @@
-import dotenv from 'dotenv';
-dotenv.config();
-
+import './env';
 import { connectDB } from './data-source';
 import createApp from './app.module';
 
@@ -13,6 +11,7 @@ const startServer = async (): Promise<void> => {
 
   app.listen(port, () => {
     console.log(`🚀 Mioralane backend running on http://localhost:${port}`);
+    console.log(`📄 Swagger docs available at http://localhost:${port}/api`);
   });
 };
 
