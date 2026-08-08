@@ -18,6 +18,10 @@ const options: swaggerJsdoc.Options = {
         url: 'http://localhost:5000',
         description: 'Development server',
       },
+      {
+        url: 'https://mioralane-backend.vercel.app',
+        description: 'Production (Vercel)',
+      },
     ],
     components: {
       securitySchemes: {
