@@ -1,6 +1,7 @@
 import express from 'express';
 import cors from 'cors';
 import cookieParser from 'cookie-parser';
+import { connectDB } from './data-source';
 import authRoutes from './auth/auth.routes';
 import productRoutes from './product/product.routes';
 import { authLimiter } from './middleware/rateLimiter.middleware';
@@ -25,6 +26,19 @@ const createApp = (): express.Application => {
 
   app.use(express.json());
   app.use(cookieParser());
+
+  // ── DB middleware: ensure MongoDB is connected before any route handler ──
+  // On Vercel serverless, the first "cold start" triggers the connection;
+  // subsequent "warm" invocations hit the cached promise from data-source.ts.
+  app.use(async (_req, _res, next) => {
+    try {
+      await connectDB();
+      next();
+    } catch (err) {
+      console.error('❌ DB connection failed:', err);
+      _res.status(503).json({ success: false, message: 'Database unavailable — try again shortly' });
+    }
+  });
 
   // Swagger UI — interactive API docs (mounted on /api/docs to avoid
   // conflicting with /api/products, /api/auth, etc.)
