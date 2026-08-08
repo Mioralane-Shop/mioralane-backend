@@ -22,16 +22,22 @@ const createApp = (): express.Application => {
   app.use(express.json());
   app.use(cookieParser());
 
-  // Swagger UI — interactive API docs
-  app.use('/api', swaggerServe, swaggerSetup(swaggerSpec, {
+  // Swagger UI — interactive API docs (mounted on /api/docs to avoid
+  // conflicting with /api/products, /api/auth, etc.)
+  app.use('/api/docs', swaggerServe, swaggerSetup(swaggerSpec, {
     customCss: '.swagger-ui .topbar { display: none }',
     customSiteTitle: 'Mioralane API Docs',
   }));
 
   // Serve raw OpenAPI JSON
-  app.get('/api-json', (_req, res) => {
+  app.get('/api/docs-json', (_req, res) => {
     res.setHeader('Content-Type', 'application/json');
     res.json(swaggerSpec);
+  });
+
+  // Root API health check
+  app.get('/api', (_req, res) => {
+    res.json({ message: 'Mioralane API is running', timestamp: new Date().toISOString() });
   });
 
   // Routes — auth rate-limited

@@ -11,7 +11,7 @@ const startServer = async (): Promise<void> => {
 
   app.listen(port, () => {
     console.log(`🚀 Mioralane backend running on http://localhost:${port}`);
-    console.log(`📄 Swagger docs available at http://localhost:${port}/api`);
+    console.log(`📄 Swagger docs at http://localhost:${port}/api/docs`);
   });
 };
 
