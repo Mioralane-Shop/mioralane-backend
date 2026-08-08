@@ -1,6 +1,4 @@
-import dotenv from 'dotenv';
-dotenv.config();
-
+import './env';
 import { connectDB } from './data-source';
 import createApp from './app.module';
 

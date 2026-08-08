@@ -1,3 +1,4 @@
+import '../src/env';
 import createApp from '../src/app.module';
 
 const app = createApp();
