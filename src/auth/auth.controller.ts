@@ -45,8 +45,64 @@ const errorMessage = (): string =>
     : 'Internal server error';
 
 /**
- * POST /register
- * Creates a new user account with a hashed password and returns a JWT.
+ * @swagger
+ * /api/auth/register:
+ *   post:
+ *     tags: [Auth]
+ *     summary: Register a new user account
+ *     description: Creates a new account and returns a JWT token + httpOnly cookie.
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [username, email, password]
+ *             properties:
+ *               username:
+ *                 type: string
+ *                 example: johndoe
+ *               email:
+ *                 type: string
+ *                 format: email
+ *                 example: john@example.com
+ *               password:
+ *                 type: string
+ *                 format: password
+ *                 minLength: 6
+ *                 example: "securePass123"
+ *     responses:
+ *       201:
+ *         description: User registered successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: true
+ *                 message:
+ *                   type: string
+ *                 token:
+ *                   type: string
+ *                 user:
+ *                   type: object
+ *                   properties:
+ *                     id:
+ *                       type: string
+ *                     username:
+ *                       type: string
+ *                     email:
+ *                       type: string
+ *                     role:
+ *                       type: string
+ *       400:
+ *         description: Missing required fields
+ *       409:
+ *         description: Username or email already exists
+ *       500:
+ *         description: Internal server error
  */
 export const registerUser = async (req: Request, res: Response): Promise<void> => {
   try {
@@ -94,8 +150,57 @@ export const registerUser = async (req: Request, res: Response): Promise<void> =
 };
 
 /**
- * POST /login
- * Authenticates a user and returns a JWT.
+ * @swagger
+ * /api/auth/login:
+ *   post:
+ *     tags: [Auth]
+ *     summary: Login with username/email and password
+ *     description: Authenticates a user and returns a JWT token + httpOnly cookie.
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [username, password]
+ *             properties:
+ *               username:
+ *                 type: string
+ *                 description: Username or email address
+ *                 example: johndoe
+ *               password:
+ *                 type: string
+ *                 format: password
+ *                 example: "securePass123"
+ *     responses:
+ *       200:
+ *         description: Login successful — returns token
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: true
+ *                 token:
+ *                   type: string
+ *                   description: JWT bearer token
+ *                 user:
+ *                   type: object
+ *                   properties:
+ *                     id:
+ *                       type: string
+ *                     username:
+ *                       type: string
+ *                     email:
+ *                       type: string
+ *                     role:
+ *                       type: string
+ *       400:
+ *         description: Invalid credentials or missing fields
+ *       500:
+ *         description: Internal server error
  */
 export const loginUser = async (req: Request, res: Response): Promise<void> => {
   try {
@@ -146,11 +251,28 @@ export const loginUser = async (req: Request, res: Response): Promise<void> => {
 };
 
 /**
- * POST /google
- * Authenticates (or registers) a user via Google OAuth ID token.
- *
- * Body: { credential: string } — the Google ID token from the frontend.
- * On success returns a Mioralane JWT for the linked local account.
+ * @swagger
+ * /api/auth/google:
+ *   post:
+ *     tags: [Auth]
+ *     summary: Login or register via Google OAuth
+ *     description: Verifies a Google ID token and returns a Mioralane JWT.
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [credential]
+ *             properties:
+ *               credential:
+ *                 type: string
+ *                 description: Google ID token from the frontend
+ *     responses:
+ *       200:
+ *         description: Google auth successful
+ *       400:
+ *         description: Invalid or expired Google token
  */
 export const googleLogin = async (req: Request, res: Response): Promise<void> => {
   try {
@@ -249,11 +371,15 @@ export const googleLogin = async (req: Request, res: Response): Promise<void> =>
 };
 
 /**
- * POST /logout
- * Ends the current user session.
- *
- * NOTE: JWT is stateless — the client is responsible for discarding the token.
- * For immediate invalidation, a token denylist (e.g. Redis) should be used.
+ * @swagger
+ * /api/auth/logout:
+ *   post:
+ *     tags: [Auth]
+ *     summary: Logout and clear session cookie
+ *     description: Clears the httpOnly auth cookie. The client must also discard the JWT.
+ *     responses:
+ *       200:
+ *         description: Logged out successfully
  */
 export const logoutUser = async (_req: Request, res: Response): Promise<void> => {
   res.clearCookie('token', {
