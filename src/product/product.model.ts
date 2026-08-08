@@ -8,6 +8,7 @@ export interface IProduct {
   slug: string;
   brand: string;
   category: string;
+  description: string;
   skinType: string[];
   skinConcern: string[];
   price: number;
@@ -57,6 +58,12 @@ const ProductSchema = new Schema<IProductDocument>(
       required: [true, 'Category is required'],
       trim: true,
       index: true,
+    },
+
+    description: {
+      type: String,
+      default: '',
+      maxlength: [2000, 'Description cannot exceed 2000 characters'],
     },
 
     skinType: {
@@ -140,9 +147,30 @@ const ProductSchema = new Schema<IProductDocument>(
       transform(_doc, ret) {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const r = ret as any;
+
+        // Standard ID mapping
         r.id = r._id.toString();
         delete r._id;
         delete r.__v;
+
+        // ── Field aliases for frontend ProductCard compatibility ──
+        r.name = r.title;                             // ProductCard renders product.name
+        r.concerns = r.skinConcern;                   // ProductCard renders product.concerns
+        r.reviewCount = r.numReviews;                 // ProductCard expects reviewCount
+        r.description = r.description || '';          // ensure string
+
+        // Derive tag for badge rendering (best > new > sale)
+        if (r.isBestSeller || r.badge === 'Best') {
+          r.tag = 'best';
+        } else if (r.isNewArrival || r.badge === 'New') {
+          r.tag = 'new';
+        } else {
+          r.tag = null;
+        }
+
+        // Compare-at price: use salePrice if set, else compute 1.2x
+        r.compareAtPrice = r.salePrice != null ? r.price : Math.round(r.price * 1.2);
+
         return r;
       },
     },
