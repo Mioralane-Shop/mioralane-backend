@@ -14,6 +14,38 @@ router.post('/logout', logoutUser);
  * Returns the authenticated user decoded from the JWT.
  * Used to validate that a token is still valid.
  */
+/**
+ * @swagger
+ * /api/auth/me:
+ *   get:
+ *     tags: [Auth]
+ *     summary: Get current authenticated user
+ *     description: Validates the JWT and returns the decoded user payload.
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Token is valid
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: true
+ *                 message:
+ *                   type: string
+ *                 user:
+ *                   type: object
+ *                   properties:
+ *                     id:
+ *                       type: string
+ *                     role:
+ *                       type: string
+ *       401:
+ *         description: Not authorized — token missing, expired, or invalid
+ */
 router.get(
   '/me',
   protect,
