@@ -15,6 +15,10 @@ export interface IProduct {
   salePrice?: number;
   badge?: 'Sale' | 'Best' | 'New';
   images: string[];
+  hoverImage?: string;
+  volume?: string;
+  discountPrice?: number;
+  productname?: string;
   stock: number;
   isBestSeller: boolean;
   isNewArrival: boolean;
@@ -107,6 +111,16 @@ const ProductSchema = new Schema<IProductDocument>(
       },
     },
 
+    hoverImage: {
+      type: String,
+      default: '',
+    },
+
+    volume: {
+      type: String,
+      default: '',
+    },
+
     stock: {
       type: Number,
       default: 0,
@@ -168,8 +182,17 @@ const ProductSchema = new Schema<IProductDocument>(
           r.tag = null;
         }
 
-        // Compare-at price: use salePrice if set, else compute 1.2x
-        r.compareAtPrice = r.salePrice != null ? r.price : Math.round(r.price * 1.2);
+        // ── Price mapping: if salePrice exists, swap ──
+        //    price → discounted selling price, compareAtPrice → original
+        if (r.salePrice != null) {
+          r.compareAtPrice = r.price;       // original (higher) price
+          r.price = r.salePrice;            // current selling price
+        } else {
+          // Fallback: compute compareAtPrice as ~20% above price
+          // so discount badge & strikethrough always render
+          r.compareAtPrice = Math.round(r.price * 1.25);
+        }
+        delete r.salePrice;
 
         return r;
       },

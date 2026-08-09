@@ -13,6 +13,9 @@ interface ProductQueryParams {
   skinType?: string;
   skinConcern?: string;
   search?: string;
+  sort?: 'newest' | 'price-asc' | 'price-desc' | 'popularity';
+  minPrice?: string;
+  maxPrice?: string;
   page?: string;
   limit?: string;
 }
@@ -69,6 +72,14 @@ interface ProductQueryParams {
  *                   type: string
  *                 minItems: 1
  *                 example: ["https://example.com/image.jpg"]
+ *               hoverImage:
+ *                 type: string
+ *                 example: "https://example.com/hover.jpg"
+ *                 description: Secondary image shown on hover
+ *               volume:
+ *                 type: string
+ *                 example: "100ml"
+ *                 description: Product volume (e.g. "50ml", "100ml")
  *               stock:
  *                 type: number
  *                 default: 0
@@ -254,6 +265,9 @@ export const getProducts = async (req: Request, res: Response): Promise<void> =>
       skinType,
       skinConcern,
       search,
+      sort,
+      minPrice,
+      maxPrice,
       page: pageStr,
       limit: limitStr,
     } = req.query as ProductQueryParams;
@@ -276,7 +290,6 @@ export const getProducts = async (req: Request, res: Response): Promise<void> =>
     }
 
     if (brand) {
-      // Case-insensitive brand match
       filter.brand = { $regex: new RegExp(`^${brand.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') };
     }
 
@@ -301,12 +314,35 @@ export const getProducts = async (req: Request, res: Response): Promise<void> =>
       ];
     }
 
+    // Price range filter
+    if (minPrice || maxPrice) {
+      filter.price = {} as Record<string, number>;
+      if (minPrice) (filter.price as Record<string, number>).$gte = parseFloat(minPrice as string);
+      if (maxPrice) (filter.price as Record<string, number>).$lte = parseFloat(maxPrice as string);
+    }
+
+    // Sorting
+    let sortObj: Record<string, 1 | -1> = { createdAt: -1 }; // default newest
+    switch (sort) {
+      case 'price-asc':
+        sortObj = { price: 1 };
+        break;
+      case 'price-desc':
+        sortObj = { price: -1 };
+        break;
+      case 'newest':
+        sortObj = { createdAt: -1 };
+        break;
+      case 'popularity':
+        sortObj = { rating: -1, numReviews: -1 };
+        break;
+    }
+
     const [products, count] = await Promise.all([
       Product.find(filter)
-        .sort({ createdAt: -1 })
+        .sort(sortObj)
         .skip((page - 1) * limit)
-        .limit(limit)
-        .lean(),
+        .limit(limit),
       Product.countDocuments(filter),
     ]);
 
@@ -366,7 +402,7 @@ export const getProductByIdOrSlug = async (req: Request, res: Response): Promise
       ? { _id: idOrSlug }
       : { slug: idOrSlug.toLowerCase() };
 
-    const product = await Product.findOne(query).lean();
+    const product = await Product.findOne(query);
 
     if (!product) {
       res.status(404).json({
