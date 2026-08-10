@@ -39,6 +39,7 @@ const options: swaggerJsdoc.Options = {
     './src/auth/auth.controller.ts',
     './src/auth/auth.routes.ts',
     './src/product/product.controller.ts',
+    './src/combo/combo.controller.ts',
   ],
 };
 
