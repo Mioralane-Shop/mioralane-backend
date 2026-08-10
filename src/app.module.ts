@@ -4,6 +4,7 @@ import cookieParser from 'cookie-parser';
 import { connectDB } from './data-source';
 import authRoutes from './auth/auth.routes';
 import productRoutes from './product/product.routes';
+import comboRoutes from './combo/combo.routes';
 import { authLimiter } from './middleware/rateLimiter.middleware';
 import { swaggerSpec, swaggerServe, swaggerSetup } from './swagger';
 
@@ -11,13 +12,35 @@ const createApp = (): express.Application => {
   const app = express();
 
   // Middlewares — CORS must be first
+  const localOrigins = [
+    'http://localhost:3000',
+    'http://localhost:3001',
+    'http://localhost:3100',
+    'http://127.0.0.1:3000',
+    'http://127.0.0.1:3001',
+    'http://127.0.0.1:3100',
+  ];
+
   app.use(
     cors({
-      origin: [
-        'https://mioralane.com',
-        'https://www.mioralane.com',
-        'http://localhost:3000',
-      ],
+      origin: (origin, callback) => {
+        if (!origin) {
+          callback(null, true);
+          return;
+        }
+
+        const allowedOrigins = [
+          'https://mioralane.com',
+          'https://www.mioralane.com',
+          ...localOrigins,
+        ];
+
+        if (allowedOrigins.includes(origin)) {
+          callback(null, true);
+        } else {
+          callback(new Error(`CORS origin denied: ${origin}`));
+        }
+      },
       credentials: true,
       methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
       allowedHeaders: ['Content-Type', 'Authorization'],
@@ -63,6 +86,9 @@ const createApp = (): express.Application => {
 
   // Product routes (public + admin)
   app.use('/api/products', productRoutes);
+
+  // Combo / bundle routes (public + admin)
+  app.use('/api/combos', comboRoutes);
 
   // Health check
   app.get('/api/health', (_req, res) => {
