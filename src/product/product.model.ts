@@ -99,7 +99,8 @@ const ProductSchema = new Schema<IProductDocument>(
 
     badge: {
       type: String,
-      enum: ['Sale', 'Best', 'New'],
+      default: '',
+      trim: true,
     },
 
     images: {
