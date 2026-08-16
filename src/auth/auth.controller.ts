@@ -382,10 +382,12 @@ export const googleLogin = async (req: Request, res: Response): Promise<void> =>
  *         description: Logged out successfully
  */
 export const logoutUser = async (_req: Request, res: Response): Promise<void> => {
+  const isProduction = process.env.NODE_ENV === 'production';
+
   res.clearCookie('token', {
     httpOnly: true,
-    secure: process.env.NODE_ENV === 'production',
-    sameSite: 'lax',
+    secure: isProduction,
+    sameSite: isProduction ? 'none' : 'lax',
     path: '/',
   });
 
