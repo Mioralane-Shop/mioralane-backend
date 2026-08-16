@@ -1,6 +1,7 @@
 import { Router, Response, RequestHandler } from 'express';
 import { registerUser, loginUser, logoutUser, googleLogin } from './auth.controller';
 import { protect, AuthenticatedRequest } from '../middleware/auth.middleware';
+import { UserModel } from './user.model';
 
 const router = Router();
 
@@ -49,11 +50,32 @@ router.post('/logout', logoutUser);
 router.get(
   '/me',
   protect,
-  ((req: AuthenticatedRequest, res: Response) => {
+  (async (req: AuthenticatedRequest, res: Response) => {
+    const userId = req.user?.id;
+
+    if (!userId) {
+      res.status(401).json({ success: false, message: 'Not authorized' });
+      return;
+    }
+
+    const user = await UserModel.findById(userId);
+
+    if (!user) {
+      res.status(401).json({ success: false, message: 'User session is no longer valid' });
+      return;
+    }
+
     res.status(200).json({
       success: true,
       message: 'Token is valid!',
-      user: req.user,
+      user: {
+        id: user._id.toString(),
+        username: user.username,
+        email: user.email,
+        avatar: user.avatar,
+        role: user.role,
+        createdAt: user.createdAt,
+      },
     });
   }) as RequestHandler
 );

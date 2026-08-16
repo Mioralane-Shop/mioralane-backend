@@ -5,6 +5,7 @@ import { connectDB } from './data-source';
 import authRoutes from './auth/auth.routes';
 import productRoutes from './product/product.routes';
 import comboRoutes from './combo/combo.routes';
+import orderRoutes from './order/order.routes';
 import { authLimiter } from './middleware/rateLimiter.middleware';
 import { swaggerSpec, swaggerServe, swaggerSetup } from './swagger';
 
@@ -89,6 +90,9 @@ const createApp = (): express.Application => {
 
   // Combo / bundle routes (public + admin)
   app.use('/api/combos', comboRoutes);
+
+  // Order routes (authenticated user flow)
+  app.use('/api/orders', orderRoutes);
 
   // Health check
   app.get('/api/health', (_req, res) => {
