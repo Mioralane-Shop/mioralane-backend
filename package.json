@@ -10,7 +10,8 @@
     "start:dev": "ts-node src/main.ts",
     "start:prod": "node -r tsconfig-paths/register dist/main",
     "dev": "tsx watch src/main.ts",
-    "seed:combos": "tsx src/scripts/seed-combos.ts"
+    "seed:combos": "tsx src/scripts/seed-combos.ts",
+    "migrate:wishlist": "tsx src/scripts/migrate-user-wishlist.ts"
   },
   "dependencies": {
     "@nestjs/common": "^10.4.15",

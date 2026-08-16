@@ -9,6 +9,8 @@ export interface IUser extends Document {
   avatar?: string;
   authProvider: 'local' | 'google';
   role: 'user' | 'admin';
+  wishlist: Schema.Types.ObjectId[];
+  comboWishlist: Schema.Types.ObjectId[];
   createdAt: Date;
 }
 
@@ -46,6 +48,24 @@ const userSchema = new Schema<IUser>({
     type: String,
     enum: ['user', 'admin'],
     default: 'user',
+  },
+  wishlist: {
+    type: [
+      {
+        type: Schema.Types.ObjectId,
+        ref: 'Product',
+      },
+    ],
+    default: [],
+  },
+  comboWishlist: {
+    type: [
+      {
+        type: Schema.Types.ObjectId,
+        ref: 'Combo',
+      },
+    ],
+    default: [],
   },
   createdAt: {
     type: Date,
