@@ -47,6 +47,7 @@ The API will be available at `http://localhost:3000`.
 | `npm run start:prod`     | Run the compiled production build        |
 | `npm run build`          | Compile the project into `dist/`         |
 | `npm run typeorm`        | Run the TypeORM CLI (uses `src/data-source.ts`) |
+| `npm run migrate:wishlist` | Backfill `wishlist` and `comboWishlist` fields for existing users |
 
 ## Folder Structure
 
@@ -74,5 +75,5 @@ src/
 
 - The project is intentionally a **minimal production-ready skeleton** for frontend integration.
 - No business logic has been implemented yet — controllers and services contain empty boilerplate methods with `TODO` markers.
-- No migrations, Docker, Redis, payments, uploads, roles/permissions, or admin APIs are configured at this stage.
+- No database migration framework is configured at this stage. One-off scripts live in `src/scripts/`.
 - TypeORM `synchronize` is enabled in non-production environments for quick prototyping; switch to migrations for production.
