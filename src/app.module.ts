@@ -6,6 +6,7 @@ import authRoutes from './auth/auth.routes';
 import productRoutes from './product/product.routes';
 import comboRoutes from './combo/combo.routes';
 import orderRoutes from './order/order.routes';
+import wishlistRoutes from './wishlist/wishlist.routes';
 import { authLimiter } from './middleware/rateLimiter.middleware';
 import { swaggerSpec, swaggerServe, swaggerSetup } from './swagger';
 
@@ -93,6 +94,9 @@ const createApp = (): express.Application => {
 
   // Order routes (authenticated user flow)
   app.use('/api/orders', orderRoutes);
+
+  // Wishlist routes (authenticated user flow)
+  app.use('/api/wishlist', wishlistRoutes);
 
   // Health check
   app.get('/api/health', (_req, res) => {
