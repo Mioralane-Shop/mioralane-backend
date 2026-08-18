@@ -7,18 +7,109 @@ import mongoose from 'mongoose';
 // ─── Types ────────────────────────────────────────────────────────────────
 
 interface ProductQueryParams {
-  tab?: 'bestseller' | 'new' | 'trending';
+  tab?: string;
   brand?: string;
   category?: string;
   skinType?: string;
   skinConcern?: string;
+  concern?: string;
   search?: string;
-  sort?: 'newest' | 'price-asc' | 'price-desc' | 'popularity';
+  sort?: string;
+  featured?: string;
+  bestSeller?: string;
+  inStock?: string;
   minPrice?: string;
   maxPrice?: string;
   page?: string;
   limit?: string;
 }
+
+type ProductAggregateRow = Record<string, any>;
+
+const escapeRegex = (value: string): string =>
+  value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+const splitCsv = (value?: string): string[] =>
+  (value ?? '')
+    .split(',')
+    .map((part) => part.trim())
+    .filter(Boolean);
+
+const parseBoolean = (value?: string): boolean =>
+  ['true', '1', 'yes', 'on'].includes((value ?? '').trim().toLowerCase());
+
+const parseNullableNumber = (value?: string): number | undefined => {
+  if (value == null || value.trim() === '') return undefined;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : undefined;
+};
+
+const buildExactMatchCondition = (
+  field: string,
+  values: string[]
+): Record<string, unknown> | null => {
+  const uniqueValues = Array.from(new Set(values.map((value) => value.trim()).filter(Boolean)));
+
+  if (uniqueValues.length === 0) {
+    return null;
+  }
+
+  return {
+    [field]: {
+      $in: uniqueValues.map((value) => new RegExp(`^${escapeRegex(value)}$`, 'i')),
+    },
+  };
+};
+
+const buildSearchCondition = (search?: string): Record<string, unknown> | null => {
+  const query = search?.trim();
+  if (!query) return null;
+
+  const regex = new RegExp(escapeRegex(query), 'i');
+
+  return {
+    $or: [
+      { title: regex },
+      { brand: regex },
+      { category: regex },
+      { description: regex },
+      { skinConcern: regex },
+    ],
+  };
+};
+
+const formatProduct = (product: ProductAggregateRow): ProductAggregateRow => {
+  const formatted = { ...product };
+
+  formatted.id = formatted._id?.toString?.() ?? formatted.id;
+  delete formatted._id;
+  delete formatted.__v;
+  delete formatted.currentPrice;
+
+  formatted.name = formatted.title;
+  formatted.concerns = formatted.skinConcern;
+  formatted.reviewCount = formatted.numReviews;
+  formatted.description = formatted.description || '';
+
+  if (formatted.isBestSeller || formatted.badge === 'Best') {
+    formatted.tag = 'best';
+  } else if (formatted.isNewArrival || formatted.badge === 'New') {
+    formatted.tag = 'new';
+  } else {
+    formatted.tag = null;
+  }
+
+  if (formatted.salePrice != null) {
+    formatted.compareAtPrice = formatted.price;
+    formatted.price = formatted.salePrice;
+  } else {
+    formatted.compareAtPrice = Math.round(Number(formatted.price || 0) * 1.25);
+  }
+
+  delete formatted.salePrice;
+
+  return formatted;
+};
 
 /**
  * @swagger
@@ -264,8 +355,12 @@ export const getProducts = async (req: Request, res: Response): Promise<void> =>
       category,
       skinType,
       skinConcern,
+      concern,
       search,
       sort,
+      featured,
+      bestSeller,
+      inStock,
       minPrice,
       maxPrice,
       page: pageStr,
@@ -277,81 +372,115 @@ export const getProducts = async (req: Request, res: Response): Promise<void> =>
       limitStr ? parseInt(limitStr) : 8
     );
 
-    // Build filter
-    const filter: Record<string, any> = {};
+    const andConditions: Record<string, unknown>[] = [];
 
-    // Tab-based filtering
-    if (tab === 'bestseller') {
-      filter.isBestSeller = true;
-    } else if (tab === 'new') {
-      filter.isNewArrival = true;
-    } else if (tab === 'trending') {
-      filter.isTrending = true;
+    const normalizedTab = tab?.trim().toLowerCase();
+    if (normalizedTab === 'bestseller' || normalizedTab === 'best' || normalizedTab === 'best-seller') {
+      andConditions.push({ isBestSeller: true });
+    } else if (normalizedTab === 'new') {
+      andConditions.push({ isNewArrival: true });
+    } else if (normalizedTab === 'trending') {
+      andConditions.push({ isTrending: true });
     }
 
-    if (brand) {
-      filter.brand = { $regex: new RegExp(`^${brand.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') };
+    if (parseBoolean(featured) || parseBoolean(bestSeller)) {
+      andConditions.push({ isBestSeller: true });
     }
 
-    if (category) {
-      filter.category = { $regex: new RegExp(`^${category.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') };
+    if (parseBoolean(inStock)) {
+      andConditions.push({ stock: { $gt: 0 } });
     }
 
-    if (skinType) {
-      filter.skinType = { $in: [skinType] };
+    const brandCondition = buildExactMatchCondition('brand', splitCsv(brand));
+    if (brandCondition) andConditions.push(brandCondition);
+
+    const categoryCondition = buildExactMatchCondition('category', splitCsv(category));
+    if (categoryCondition) andConditions.push(categoryCondition);
+
+    const skinTypeCondition = buildExactMatchCondition('skinType', splitCsv(skinType));
+    if (skinTypeCondition) andConditions.push(skinTypeCondition);
+
+    const concernValues = [...splitCsv(skinConcern), ...splitCsv(concern)];
+    const concernCondition = buildExactMatchCondition('skinConcern', concernValues);
+    if (concernCondition) andConditions.push(concernCondition);
+
+    const searchCondition = buildSearchCondition(search);
+    if (searchCondition) andConditions.push(searchCondition);
+
+    const min = parseNullableNumber(minPrice);
+    const max = parseNullableNumber(maxPrice);
+
+    if (min !== undefined || max !== undefined) {
+      const priceBounds: Record<string, number> = {};
+      const lower = min !== undefined ? min : undefined;
+      const upper = max !== undefined ? max : undefined;
+      const minBound = lower !== undefined && upper !== undefined && lower > upper ? upper : lower;
+      const maxBound = lower !== undefined && upper !== undefined && lower > upper ? lower : upper;
+
+      if (minBound !== undefined) priceBounds.$gte = minBound;
+      if (maxBound !== undefined) priceBounds.$lte = maxBound;
+
+      andConditions.push({ currentPrice: priceBounds });
     }
 
-    if (skinConcern) {
-      filter.skinConcern = { $in: [skinConcern] };
-    }
-
-    if (search) {
-      filter.$or = [
-        { title: { $regex: search, $options: 'i' } },
-        { brand: { $regex: search, $options: 'i' } },
-        { category: { $regex: search, $options: 'i' } },
-        { skinConcern: { $regex: search, $options: 'i' } },
-      ];
-    }
-
-    // Price range filter
-    if (minPrice || maxPrice) {
-      filter.price = {} as Record<string, number>;
-      if (minPrice) (filter.price as Record<string, number>).$gte = parseFloat(minPrice as string);
-      if (maxPrice) (filter.price as Record<string, number>).$lte = parseFloat(maxPrice as string);
-    }
-
-    // Sorting
-    let sortObj: Record<string, 1 | -1> = { createdAt: -1 }; // default newest
-    switch (sort) {
+    const normalizedSort = sort?.trim().toLowerCase();
+    let sortObj: Record<string, 1 | -1> = { createdAt: -1 };
+    switch (normalizedSort) {
       case 'price-asc':
-        sortObj = { price: 1 };
+        sortObj = { currentPrice: 1, createdAt: -1 };
         break;
       case 'price-desc':
-        sortObj = { price: -1 };
+        sortObj = { currentPrice: -1, createdAt: -1 };
+        break;
+      case 'rating':
+        sortObj = { rating: -1, numReviews: -1, createdAt: -1 };
+        break;
+      case 'popular':
+      case 'popularity':
+        sortObj = { rating: -1, numReviews: -1, createdAt: -1 };
         break;
       case 'newest':
+      default:
         sortObj = { createdAt: -1 };
-        break;
-      case 'popularity':
-        sortObj = { rating: -1, numReviews: -1 };
         break;
     }
 
-    const [products, count] = await Promise.all([
-      Product.find(filter)
-        .sort(sortObj)
-        .skip((page - 1) * limit)
-        .limit(limit),
-      Product.countDocuments(filter),
-    ]);
+    const pipeline: any[] = [
+      {
+        $addFields: {
+          currentPrice: { $ifNull: ['$salePrice', '$price'] },
+        },
+      },
+    ];
+
+    if (andConditions.length > 0) {
+      pipeline.push({ $match: { $and: andConditions } });
+    }
+
+    pipeline.push(
+      { $sort: sortObj },
+      {
+        $facet: {
+          products: [
+            { $skip: (page - 1) * limit },
+            { $limit: limit },
+          ],
+          meta: [{ $count: 'totalProducts' }],
+        },
+      }
+    );
+
+    const [result] = await Product.aggregate(pipeline);
+    const products = (result?.products ?? []).map(formatProduct);
+    const totalProducts = result?.meta?.[0]?.totalProducts ?? 0;
 
     res.status(200).json({
       success: true,
-      count,
+      count: totalProducts,
+      totalProducts,
       page,
       limit,
-      totalPages: Math.ceil(count / limit),
+      totalPages: Math.ceil(totalProducts / limit),
       products,
     });
   } catch (error) {
