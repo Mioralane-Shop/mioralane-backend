@@ -1,6 +1,6 @@
 import crypto from 'crypto';
 import mongoose from 'mongoose';
-import { Request, Response } from 'express';
+import { Response } from 'express';
 import { Product } from '../product/product.model';
 import { Combo } from '../combo/combo.model';
 import { Order, DeliveryZone, OrderItemType, PaymentMethod } from './order.model';
@@ -29,6 +29,8 @@ type CreateOrderBody = {
   paymentMethod?: PaymentMethod;
 };
 
+type HttpError = Error & { statusCode?: number };
+
 const SHIPPING_FEES: Record<DeliveryZone, number> = {
   inside_dhaka: 80,
   outside_dhaka: 150,
@@ -42,24 +44,14 @@ const generateOrderNumber = (): string => {
 
 const normalizePhone = (value: string): string => value.trim().replace(/\s+/g, ' ');
 
-const rollbackStockChanges = async (
-  changes: Array<{ itemType: OrderItemType; itemId: string; quantity: number }>
-) => {
-  for (const change of changes) {
-    if (change.itemType === 'combo') {
-      await Combo.findByIdAndUpdate(change.itemId, {
-        $inc: { stock: change.quantity },
-      });
-    } else {
-      await Product.findByIdAndUpdate(change.itemId, {
-        $inc: { stock: change.quantity },
-      });
-    }
-  }
-};
-
 const isValidZone = (zone: unknown): zone is DeliveryZone =>
   zone === 'inside_dhaka' || zone === 'outside_dhaka';
+
+const createHttpError = (statusCode: number, message: string): HttpError => {
+  const error = new Error(message) as HttpError;
+  error.statusCode = statusCode;
+  return error;
+};
 
 export const createOrder = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   const body = req.body as CreateOrderBody | undefined;
@@ -98,13 +90,18 @@ export const createOrder = async (req: AuthenticatedRequest, res: Response): Pro
     return;
   }
 
+  const validatedShippingAddress = shippingAddress as {
+    name: string;
+    phone: string;
+    deliveryZone: DeliveryZone;
+    area: string;
+    address: string;
+  };
+
   const normalizedItems = items
     .map((item) => ({
       itemId: (item?.itemId ?? item?.productId)?.trim(),
       itemType: item?.itemType,
-      title: item?.title?.trim(),
-      price: typeof item?.price === 'number' ? item.price : Number(item?.price),
-      thumbnail: item?.thumbnail?.trim(),
       quantity: Number(item?.quantity),
     }))
     .filter((item) => item.itemId && Number.isInteger(item.quantity) && item.quantity > 0);
@@ -117,171 +114,162 @@ export const createOrder = async (req: AuthenticatedRequest, res: Response): Pro
     return;
   }
 
-  const resolvedItems: Array<{
-    itemType: OrderItemType;
-    itemId: string;
-    sourceRef?: {
-      model: 'product' | 'combo';
-      id: mongoose.Types.ObjectId;
-    };
-    title: string;
-    price: number;
-    thumbnail: string;
-    quantity: number;
-  }> = [];
-  const missing: string[] = [];
-
-  for (const item of normalizedItems) {
-    const itemId = item.itemId;
-    if (!itemId) {
-      missing.push('unknown');
-      continue;
-    }
-
-    const product = await Product.findById(itemId);
-    const combo = product ? null : await Combo.findById(itemId);
-
-    if (item.itemType === 'product' && !product) {
-      missing.push(itemId);
-      continue;
-    }
-
-    if (item.itemType === 'combo' && !combo) {
-      if (!product) {
-        missing.push(itemId);
-        continue;
-      }
-    }
-
-    const resolvedType: OrderItemType =
-      item.itemType ??
-      (combo ? 'combo' : 'product');
-
-    const sourceDoc = resolvedType === 'combo' ? combo ?? product : product ?? combo;
-
-    if (!sourceDoc) {
-      if (resolvedType === 'combo' && item.title && typeof item.price === 'number') {
-        resolvedItems.push({
-          itemType: resolvedType,
-          itemId,
-          title: item.title,
-          price: item.price,
-          thumbnail: item.thumbnail ?? '',
-          quantity: item.quantity,
-        });
-        continue;
-      }
-
-      missing.push(itemId);
-      continue;
-    }
-
-    resolvedItems.push({
-      itemType: resolvedType,
-      itemId,
-      sourceRef: {
-        model: resolvedType,
-        id: sourceDoc._id,
-      },
-      title: (sourceDoc as { title?: string; name?: string }).title
-        ?? (sourceDoc as { name?: string }).name
-        ?? itemId,
-      price: sourceDoc.price,
-      thumbnail: sourceDoc.images?.[0] ?? '',
-      quantity: item.quantity,
-    });
-  }
-
-  if (missing.length > 0) {
-    res.status(404).json({
-      success: false,
-      message: `Some items were not found: ${missing.join(', ')}`,
-    });
-    return;
-  }
-
-  const stockChanges: Array<{ itemType: OrderItemType; itemId: string; quantity: number }> = [];
-  const orderItems = resolvedItems.map((item) => ({
-    itemType: item.itemType,
-    sourceId: item.itemId,
-    product: item.sourceRef?.model === 'product' ? item.sourceRef.id : undefined,
-    combo: item.sourceRef?.model === 'combo' ? item.sourceRef.id : undefined,
-    title: item.title,
-    quantity: item.quantity,
-    price: item.price,
-    thumbnail: item.thumbnail,
-  }));
+  const session = await mongoose.startSession();
+  let createdOrder: any = null;
 
   try {
-    for (const item of resolvedItems) {
-      if (!item.sourceRef) {
-        continue;
-      }
+    createdOrder = await session.withTransaction(async () => {
+      const resolvedItems: Array<{
+        itemType: OrderItemType;
+        itemId: string;
+        sourceId: mongoose.Types.ObjectId;
+        title: string;
+        price: number;
+        thumbnail: string;
+        quantity: number;
+      }> = [];
 
-      const updated =
-        item.sourceRef.model === 'combo'
-          ? await Combo.findOneAndUpdate(
-              { _id: item.sourceRef.id, stock: { $gte: item.quantity } },
-              { $inc: { stock: -item.quantity } },
-              { new: true }
-            )
-          : await Product.findOneAndUpdate(
-              { _id: item.sourceRef.id, stock: { $gte: item.quantity } },
-              { $inc: { stock: -item.quantity } },
-              { new: true }
-            );
+      for (const item of normalizedItems) {
+        if (item.itemType !== 'product' && item.itemType !== 'combo') {
+          throw createHttpError(
+            400,
+            `Order item ${item.itemId} must specify a valid itemType of product or combo`
+          );
+        }
 
-      if (!updated) {
-        await rollbackStockChanges(stockChanges);
-        res.status(409).json({
-          success: false,
-          message: 'One or more items are out of stock',
+        const sourceDoc =
+          item.itemType === 'combo'
+            ? await Combo.findById(item.itemId)
+                .session(session)
+                .select('_id title price images stock')
+                .exec()
+            : await Product.findById(item.itemId)
+                .session(session)
+                .select('_id title price images stock')
+                .exec();
+
+        if (!sourceDoc) {
+          throw createHttpError(
+            404,
+            `${item.itemType === 'combo' ? 'Combo' : 'Product'} not found: ${item.itemId}`
+          );
+        }
+
+        if (sourceDoc.stock < item.quantity) {
+          throw createHttpError(
+            409,
+            `Insufficient stock for ${sourceDoc.title ?? item.itemId}`
+          );
+        }
+
+          resolvedItems.push({
+          itemType: item.itemType,
+          itemId: item.itemId as string,
+          sourceId: sourceDoc._id,
+          title: sourceDoc.title ?? (item.itemId as string),
+          price: sourceDoc.price,
+          thumbnail: sourceDoc.images?.[0] ?? '',
+          quantity: item.quantity,
         });
-        return;
       }
 
-      stockChanges.push({
-        itemType: item.itemType,
-        itemId: item.itemId,
-        quantity: item.quantity,
-      });
-    }
+      for (const item of resolvedItems) {
+        const updated =
+          item.itemType === 'combo'
+            ? await Combo.findOneAndUpdate(
+                { _id: item.sourceId, stock: { $gte: item.quantity } },
+                { $inc: { stock: -item.quantity } },
+                { new: true, session }
+              ).exec()
+            : await Product.findOneAndUpdate(
+                { _id: item.sourceId, stock: { $gte: item.quantity } },
+                { $inc: { stock: -item.quantity } },
+                { new: true, session }
+              ).exec();
 
-    const itemsTotal = orderItems.reduce((sum, item) => sum + item.price * item.quantity, 0);
-    const shippingFee = SHIPPING_FEES[shippingAddress.deliveryZone];
-    const totalAmount = itemsTotal + shippingFee;
+        if (!updated) {
+          throw createHttpError(409, 'One or more items are out of stock');
+        }
+      }
 
-    const order = await Order.create({
-      orderNumber: generateOrderNumber(),
-      user: new mongoose.Types.ObjectId(userId),
-      items: orderItems,
-      shippingAddress: {
-        name: shippingAddress.name.trim(),
-        phone: normalizePhone(shippingAddress.phone),
-        deliveryZone: shippingAddress.deliveryZone,
-        area: shippingAddress.area.trim(),
-        address: shippingAddress.address.trim(),
-      },
-      itemsTotal,
-      shippingFee,
-      totalAmount,
-      paymentMethod,
-      paymentStatus: 'pending',
-      orderStatus: OrderStatus.PENDING,
+      const itemsTotal = resolvedItems.reduce((sum, item) => sum + item.price * item.quantity, 0);
+      const shippingFee = SHIPPING_FEES[validatedShippingAddress.deliveryZone];
+      const totalAmount = itemsTotal + shippingFee;
+
+      const [order] = await Order.create(
+        [
+          {
+            orderNumber: generateOrderNumber(),
+            user: new mongoose.Types.ObjectId(userId),
+            items: resolvedItems.map((item) => ({
+              itemType: item.itemType,
+              sourceId: item.itemId,
+              product: item.itemType === 'product' ? item.sourceId : undefined,
+              combo: item.itemType === 'combo' ? item.sourceId : undefined,
+              title: item.title,
+              quantity: item.quantity,
+              price: item.price,
+              thumbnail: item.thumbnail,
+            })),
+            shippingAddress: {
+              name: validatedShippingAddress.name.trim(),
+              phone: normalizePhone(validatedShippingAddress.phone),
+              deliveryZone: validatedShippingAddress.deliveryZone,
+              area: validatedShippingAddress.area.trim(),
+              address: validatedShippingAddress.address.trim(),
+            },
+            itemsTotal,
+            shippingFee,
+            totalAmount,
+            paymentMethod,
+            paymentStatus: 'pending',
+            orderStatus: OrderStatus.PENDING,
+          },
+        ],
+        { session }
+      );
+
+      return order;
     });
 
     res.status(201).json({
       success: true,
       message: 'Order placed successfully',
-      order,
+      order: createdOrder,
     });
   } catch (error) {
-    await rollbackStockChanges(stockChanges);
+    const httpError = error as HttpError;
+    const transactionUnsupported =
+      error instanceof Error &&
+      /transaction numbers are only allowed|replica set|mongos|Transaction numbers/i.test(
+        error.message
+      );
+
     console.error('[createOrder]', error);
+    if (transactionUnsupported) {
+      res.status(503).json({
+        success: false,
+        message:
+          'MongoDB transactions are not supported by the current deployment topology. Checkout cannot complete safely without a replica set or compatible MongoDB setup.',
+      });
+      return;
+    }
+
+    if (httpError.statusCode) {
+      res.status(httpError.statusCode).json({
+        success: false,
+        message: httpError.message,
+      });
+      return;
+    }
+
     res.status(500).json({
       success: false,
       message: 'Internal server error',
     });
+  }
+  finally {
+    await session.endSession();
   }
 };
 
