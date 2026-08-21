@@ -162,12 +162,16 @@ export const registerUser = async (req: Request, res: Response): Promise<void> =
  *         application/json:
  *           schema:
  *             type: object
- *             required: [username, password]
+ *             required: [password]
  *             properties:
  *               username:
  *                 type: string
  *                 description: Username or email address
  *                 example: johndoe
+ *               email:
+ *                 type: string
+ *                 description: Email address
+ *                 example: admin@example.com
  *               password:
  *                 type: string
  *                 format: password
@@ -204,16 +208,17 @@ export const registerUser = async (req: Request, res: Response): Promise<void> =
  */
 export const loginUser = async (req: Request, res: Response): Promise<void> => {
   try {
-    const { username, password } = req.body || {};
+    const { username, email, password } = req.body || {};
+    const loginIdentifier = username ?? email;
 
-    if (!username || !password) {
-      res.status(400).json({ success: false, message: 'Username and password are required' });
+    if (!loginIdentifier || !password) {
+      res.status(400).json({ success: false, message: 'Username or email and password are required' });
       return;
     }
 
     // Allow login by username OR email
     const user = await UserModel.findOne({
-      $or: [{ username }, { email: username.toLowerCase() }],
+      $or: [{ username: loginIdentifier }, { email: loginIdentifier.toLowerCase() }],
     }).select('+password');
 
     if (!user) {
