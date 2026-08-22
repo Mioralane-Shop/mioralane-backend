@@ -2,6 +2,7 @@ import { Request, Response } from 'express';
 import { Combo, ICombo } from './combo.model';
 import { getPaginationParams } from '../utils/pagination';
 import { slugify } from '../utils/slugify';
+import mongoose from 'mongoose';
 
 // ─── Types ────────────────────────────────────────────────────────────────
 
@@ -11,6 +12,8 @@ interface ComboQueryParams {
     page?: string;
     limit?: string;
 }
+
+const isValidObjectId = (value: string): boolean => mongoose.Types.ObjectId.isValid(value);
 
 /**
  * @swagger
@@ -138,10 +141,10 @@ export const createCombo = async (req: Request, res: Response): Promise<void> =>
             slug: slugify(body.title),
         };
 
-        // Auto-compute savings if compareAtPrice is provided
-        if (data.compareAtPrice && data.compareAtPrice > data.price && !data.savings) {
-            data.savings = data.compareAtPrice - data.price;
-        }
+        // Keep savings derived from the actual bundle prices
+        data.savings = data.compareAtPrice && data.compareAtPrice > data.price
+            ? data.compareAtPrice - data.price
+            : 0;
 
         const combo = await Combo.create(data);
 
@@ -402,6 +405,14 @@ export const updateCombo = async (req: Request, res: Response): Promise<void> =>
         const { id } = req.params as { id: string };
         const updates = req.body;
 
+        if (!isValidObjectId(id)) {
+            res.status(400).json({
+                success: false,
+                message: 'Invalid combo ID',
+            });
+            return;
+        }
+
         // Only allow specific fields to be updated
         const allowed = [
             'badge', 'title', 'description', 'price', 'compareAtPrice', 'savings',
@@ -415,15 +426,20 @@ export const updateCombo = async (req: Request, res: Response): Promise<void> =>
             }
         }
 
-        const combo = await Combo.findByIdAndUpdate(id, sanitized, {
-            new: true,
-            runValidators: true,
-        });
+        const combo = await Combo.findById(id);
 
         if (!combo) {
             res.status(404).json({ success: false, message: 'Combo not found' });
             return;
         }
+
+        combo.set(sanitized);
+
+        const compareAtPrice = typeof combo.compareAtPrice === 'number' ? combo.compareAtPrice : 0;
+        const price = typeof combo.price === 'number' ? combo.price : 0;
+        combo.savings = compareAtPrice > price ? compareAtPrice - price : 0;
+
+        await combo.save();
 
         res.status(200).json({ success: true, combo });
     } catch (error: any) {
@@ -434,5 +450,62 @@ export const updateCombo = async (req: Request, res: Response): Promise<void> =>
         }
         console.error('Error updating combo:', error);
         res.status(500).json({ success: false, message: 'Internal server error' });
+    }
+};
+
+/**
+ * @swagger
+ * /api/combos/{id}:
+ *   delete:
+ *     tags: [Combos]
+ *     summary: Delete a combo / bundle (admin only)
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *     responses:
+ *       200:
+ *         description: Combo deleted
+ *       400:
+ *         description: Invalid combo ID
+ *       404:
+ *         description: Combo not found
+ */
+export const deleteCombo = async (req: Request, res: Response): Promise<void> => {
+    try {
+        const { id } = req.params as { id: string };
+
+        if (!isValidObjectId(id)) {
+            res.status(400).json({
+                success: false,
+                message: 'Invalid combo ID',
+            });
+            return;
+        }
+
+        const combo = await Combo.findByIdAndDelete(id);
+
+        if (!combo) {
+            res.status(404).json({
+                success: false,
+                message: 'Combo not found',
+            });
+            return;
+        }
+
+        res.status(200).json({
+            success: true,
+            message: 'Combo deleted successfully',
+        });
+    } catch (error) {
+        console.error('Error deleting combo:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Internal server error',
+        });
     }
 };
