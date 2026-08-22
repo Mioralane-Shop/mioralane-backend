@@ -2,6 +2,8 @@ import { Response } from 'express';
 import mongoose, { Schema } from 'mongoose';
 import { AuthenticatedRequest } from '../middleware/auth.middleware';
 import { UserModel } from '../auth/user.model';
+import Product from '../product/product.model';
+import Combo from '../combo/combo.model';
 
 const wishlistProductSelect =
   'title slug brand category description skinType skinConcern price salePrice badge images hoverImage volume stock isBestSeller isNewArrival isTrending rating numReviews createdAt updatedAt';
@@ -20,6 +22,9 @@ const normalizeWishlistIds = (wishlist: unknown[]): string[] =>
     })
     .filter(Boolean) as string[];
 
+const compactPopulatedWishlist = <T>(wishlist: unknown[]): T[] =>
+  wishlist.filter((item): item is T => Boolean(item));
+
 const populateWishlist = (userId: string) =>
   UserModel.findById(userId)
     .populate({
@@ -30,6 +35,18 @@ const populateWishlist = (userId: string) =>
       path: 'comboWishlist',
       select: wishlistComboSelect,
     });
+
+async function findWishlistTarget(productId: string, itemType: string | undefined) {
+  if (itemType === 'combo') {
+    return Combo.findById(productId).select('_id').lean();
+  }
+
+  if (!itemType || itemType === 'product') {
+    return Product.findById(productId).select('_id').lean();
+  }
+
+  return null;
+}
 
 export const getWishlist = async (
   req: AuthenticatedRequest,
@@ -43,8 +60,8 @@ export const getWishlist = async (
       return;
     }
 
-    const productWishlist = user.wishlist ?? [];
-    const comboWishlist = user.comboWishlist ?? [];
+    const productWishlist = compactPopulatedWishlist(user.wishlist ?? []);
+    const comboWishlist = compactPopulatedWishlist(user.comboWishlist ?? []);
 
     res.status(200).json({
       success: true,
@@ -75,6 +92,21 @@ export const toggleWishlist = async (
       return;
     }
 
+    if (itemType !== 'product' && itemType !== 'combo' && itemType != null) {
+      res.status(400).json({ success: false, message: 'itemType must be product or combo' });
+      return;
+    }
+
+    const target = await findWishlistTarget(productId, itemType);
+
+    if (!target) {
+      res.status(404).json({
+        success: false,
+        message: `${itemType === 'combo' ? 'Combo' : 'Product'} not found`,
+      });
+      return;
+    }
+
     const user = await UserModel.findById(req.user.id);
 
     if (!user) {
@@ -99,8 +131,8 @@ export const toggleWishlist = async (
     await user.save();
 
     const populatedUser = await populateWishlist(req.user.id);
-    const productWishlist = populatedUser?.wishlist ?? [];
-    const comboWishlist = populatedUser?.comboWishlist ?? [];
+    const productWishlist = compactPopulatedWishlist(populatedUser?.wishlist ?? []);
+    const comboWishlist = compactPopulatedWishlist(populatedUser?.comboWishlist ?? []);
 
     res.status(200).json({
       success: true,
