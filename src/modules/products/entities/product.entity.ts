@@ -2,12 +2,14 @@ import {
   Column,
   CreateDateColumn,
   Entity,
+  Check,
   ManyToOne,
   PrimaryGeneratedColumn,
   UpdateDateColumn,
 } from 'typeorm';
 import { Category } from '@/modules/categories/entities/category.entity';
 
+@Check(`"stock" >= 0 AND "stock" = FLOOR("stock")`)
 @Entity('products')
 export class Product {
   @PrimaryGeneratedColumn()
@@ -25,7 +27,7 @@ export class Product {
   @Column({ type: 'decimal', precision: 10, scale: 2, default: 0 })
   price: number;
 
-  @Column({ default: 0 })
+  @Column({ type: 'int', default: 0 })
   stock: number;
 
   @Column({ type: 'simple-array', nullable: true })

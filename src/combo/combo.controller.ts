@@ -161,6 +161,15 @@ export const createCombo = async (req: Request, res: Response): Promise<void> =>
             return;
         }
 
+        if (error instanceof mongoose.Error.CastError || error?.name === 'CastError') {
+            res.status(400).json({
+                success: false,
+                message: 'Validation failed',
+                errors: [error.path === 'stock' ? 'Stock must be a non-negative integer' : error.message],
+            });
+            return;
+        }
+
         if (error.name === 'ValidationError') {
             const messages = Object.values(error.errors).map((e: any) => e.message);
             res.status(400).json({
@@ -443,6 +452,15 @@ export const updateCombo = async (req: Request, res: Response): Promise<void> =>
 
         res.status(200).json({ success: true, combo });
     } catch (error: any) {
+        if (error instanceof mongoose.Error.CastError || error?.name === 'CastError') {
+            res.status(400).json({
+                success: false,
+                message: 'Validation failed',
+                errors: [error.path === 'stock' ? 'Stock must be a non-negative integer' : error.message],
+            });
+            return;
+        }
+
         if (error.name === 'ValidationError') {
             const messages = Object.values(error.errors).map((e: any) => e.message);
             res.status(400).json({ success: false, message: 'Validation failed', errors: messages });

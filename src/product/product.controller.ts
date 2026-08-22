@@ -341,6 +341,15 @@ export const createProduct = async (req: Request, res: Response): Promise<void> 
       return;
     }
 
+    if (error instanceof mongoose.Error.CastError || error?.name === 'CastError') {
+      res.status(400).json({
+        success: false,
+        message: 'Validation failed',
+        errors: [error.path === 'stock' ? 'Stock must be a non-negative integer' : error.message],
+      });
+      return;
+    }
+
     // Mongoose validation error
     if (error.name === 'ValidationError') {
       const messages = Object.values(error.errors).map((e: any) => e.message);
@@ -422,6 +431,15 @@ export const updateProduct = async (req: Request, res: Response): Promise<void> 
       res.status(409).json({
         success: false,
         message: 'A product with a similar title already exists',
+      });
+      return;
+    }
+
+    if (error instanceof mongoose.Error.CastError || error?.name === 'CastError') {
+      res.status(400).json({
+        success: false,
+        message: 'Validation failed',
+        errors: [error.path === 'stock' ? 'Stock must be a non-negative integer' : error.message],
       });
       return;
     }
