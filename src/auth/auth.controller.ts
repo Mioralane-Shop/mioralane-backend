@@ -5,7 +5,7 @@ import jwt from 'jsonwebtoken';
 import { OAuth2Client } from 'google-auth-library';
 import { UserModel } from './user.model';
 
-const JWT_SECRET = process.env.JWT_SECRET || 'fallback_secret_do_not_use_in_prod';
+const JWT_SECRET = process.env.JWT_SECRET;
 const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '7d';
 const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || '';
 
@@ -32,6 +32,10 @@ const setAuthCookie = (res: Response, token: string): void => {
  * Generates a signed JWT for the given user payload.
  */
 const generateToken = (payload: { id: string; role: 'user' | 'admin' }): string => {
+  if (!JWT_SECRET) {
+    throw new Error('JWT_SECRET is required for authentication');
+  }
+
   const options: jwt.SignOptions = { expiresIn: JWT_EXPIRES_IN as jwt.SignOptions['expiresIn'] };
   return jwt.sign(payload, JWT_SECRET, options);
 };

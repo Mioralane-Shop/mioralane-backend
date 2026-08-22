@@ -14,7 +14,7 @@ export interface AuthenticatedRequest extends Request {
   };
 }
 
-const JWT_SECRET = process.env.JWT_SECRET || 'fallback_secret_do_not_use_in_prod';
+const JWT_SECRET = process.env.JWT_SECRET;
 
 interface JwtPayload {
   id: string;
@@ -31,6 +31,10 @@ interface JwtPayload {
  */
 export const protect = (req: Request, res: Response, next: NextFunction): void => {
   try {
+    if (!JWT_SECRET) {
+      throw new Error('JWT_SECRET is required for authentication');
+    }
+
     let token: string | undefined;
 
     // 1. Try httpOnly cookie first
