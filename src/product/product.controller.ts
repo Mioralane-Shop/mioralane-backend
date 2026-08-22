@@ -25,6 +25,48 @@ interface ProductQueryParams {
 }
 
 type ProductAggregateRow = Record<string, any>;
+type ProductMutationBody = Partial<
+  Pick<
+    IProduct,
+    | 'title'
+    | 'slug'
+    | 'brand'
+    | 'category'
+    | 'description'
+    | 'skinType'
+    | 'skinConcern'
+    | 'price'
+    | 'salePrice'
+    | 'badge'
+    | 'images'
+    | 'hoverImage'
+    | 'volume'
+    | 'stock'
+    | 'isBestSeller'
+    | 'isNewArrival'
+    | 'isTrending'
+  >
+>;
+
+const mutationFields: (keyof ProductMutationBody)[] = [
+  'title',
+  'slug',
+  'brand',
+  'category',
+  'description',
+  'skinType',
+  'skinConcern',
+  'price',
+  'salePrice',
+  'badge',
+  'images',
+  'hoverImage',
+  'volume',
+  'stock',
+  'isBestSeller',
+  'isNewArrival',
+  'isTrending',
+];
 
 const escapeRegex = (value: string): string =>
   value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -42,6 +84,42 @@ const parseNullableNumber = (value?: string): number | undefined => {
   if (value == null || value.trim() === '') return undefined;
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : undefined;
+};
+
+const isValidObjectId = (value: string): boolean => mongoose.Types.ObjectId.isValid(value);
+
+const sanitizeMutationBody = (body: Record<string, unknown>): ProductMutationBody => {
+  const sanitized: ProductMutationBody = {};
+
+  for (const key of mutationFields) {
+    const value = body[key];
+    if (value !== undefined) {
+      sanitized[key] = value as never;
+    }
+  }
+
+  return sanitized;
+};
+
+const resolveSlug = (body: ProductMutationBody, fallbackTitle?: string): string => {
+  const source =
+    typeof body.slug === 'string' && body.slug.trim()
+      ? body.slug
+      : typeof body.title === 'string' && body.title.trim()
+        ? body.title
+        : fallbackTitle ?? '';
+
+  return slugify(source);
+};
+
+const findDuplicateSlug = async (slug: string, excludeId?: string): Promise<boolean> => {
+  const query: Record<string, unknown> = { slug };
+  if (excludeId) {
+    query._id = { $ne: excludeId };
+  }
+
+  const duplicate = await Product.findOne(query).select('_id').lean();
+  return Boolean(duplicate);
 };
 
 const buildExactMatchCondition = (
@@ -215,10 +293,10 @@ const formatProduct = (product: ProductAggregateRow): ProductAggregateRow => {
  */
 export const createProduct = async (req: Request, res: Response): Promise<void> => {
   try {
-    const body = req.body as IProduct;
+    const body = sanitizeMutationBody((req.body ?? {}) as Record<string, unknown>);
 
     // Validate required fields
-    if (!body.title || !body.brand || !body.category || !body.price) {
+    if (!body.title || !body.brand || !body.category || body.price === undefined || body.price === null) {
       res.status(400).json({
         success: false,
         message: 'Missing required fields: title, brand, category, price',
@@ -234,9 +312,19 @@ export const createProduct = async (req: Request, res: Response): Promise<void> 
       return;
     }
 
+    const slug = resolveSlug(body);
+
+    if (await findDuplicateSlug(slug)) {
+      res.status(409).json({
+        success: false,
+        message: 'A product with a similar title already exists',
+      });
+      return;
+    }
+
     const product = await Product.create({
       ...body,
-      slug: slugify(body.title), // pre-save hook will ensure uniqueness
+      slug,
     });
 
     res.status(201).json({
@@ -265,6 +353,125 @@ export const createProduct = async (req: Request, res: Response): Promise<void> 
     }
 
     console.error('Error creating product:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Internal server error',
+    });
+  }
+};
+
+export const updateProduct = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const { id } = req.params as { id: string };
+
+    if (!isValidObjectId(id)) {
+      res.status(400).json({
+        success: false,
+        message: 'Invalid product ID',
+      });
+      return;
+    }
+
+    const product = await Product.findById(id);
+
+    if (!product) {
+      res.status(404).json({
+        success: false,
+        message: 'Product not found',
+      });
+      return;
+    }
+
+    const body = sanitizeMutationBody((req.body ?? {}) as Record<string, unknown>);
+
+    if (
+      (body.title !== undefined && body.title.trim() === '') ||
+      (body.brand !== undefined && body.brand.trim() === '') ||
+      (body.category !== undefined && body.category.trim() === '')
+    ) {
+      res.status(400).json({
+        success: false,
+        message: 'Title, brand, and category cannot be empty',
+      });
+      return;
+    }
+
+    const nextSlug = resolveSlug(body, product.title);
+
+    if (await findDuplicateSlug(nextSlug, id)) {
+      res.status(409).json({
+        success: false,
+        message: 'A product with a similar title already exists',
+      });
+      return;
+    }
+
+    product.set({
+      ...body,
+      slug: nextSlug,
+    });
+
+    await product.save();
+
+    res.status(200).json({
+      success: true,
+      product,
+    });
+  } catch (error: any) {
+    if (error.code === 11000) {
+      res.status(409).json({
+        success: false,
+        message: 'A product with a similar title already exists',
+      });
+      return;
+    }
+
+    if (error.name === 'ValidationError') {
+      const messages = Object.values(error.errors).map((e: any) => e.message);
+      res.status(400).json({
+        success: false,
+        message: 'Validation failed',
+        errors: messages,
+      });
+      return;
+    }
+
+    console.error('Error updating product:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Internal server error',
+    });
+  }
+};
+
+export const deleteProduct = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const { id } = req.params as { id: string };
+
+    if (!isValidObjectId(id)) {
+      res.status(400).json({
+        success: false,
+        message: 'Invalid product ID',
+      });
+      return;
+    }
+
+    const product = await Product.findByIdAndDelete(id);
+
+    if (!product) {
+      res.status(404).json({
+        success: false,
+        message: 'Product not found',
+      });
+      return;
+    }
+
+    res.status(200).json({
+      success: true,
+      message: 'Product deleted successfully',
+    });
+  } catch (error) {
+    console.error('Error deleting product:', error);
     res.status(500).json({
       success: false,
       message: 'Internal server error',
