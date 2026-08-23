@@ -1,6 +1,11 @@
 import mongoose, { Schema, Document, Model } from 'mongoose';
 import { slugify } from '../utils/slugify';
 
+const integerStockValidator = {
+  validator: Number.isInteger,
+  message: 'Stock must be a non-negative integer',
+};
+
 // ─── Types ────────────────────────────────────────────────────────────────
 
 export interface IProduct {
@@ -126,6 +131,7 @@ const ProductSchema = new Schema<IProductDocument>(
       type: Number,
       default: 0,
       min: [0, 'Stock cannot be negative'],
+      validate: integerStockValidator,
     },
 
     isBestSeller: {

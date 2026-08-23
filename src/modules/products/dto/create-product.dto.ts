@@ -1,5 +1,6 @@
 import {
   IsArray,
+  IsInt,
   IsNotEmpty,
   IsNumber,
   IsOptional,
@@ -27,6 +28,7 @@ export class CreateProductDto {
 
   @IsNumber()
   @IsOptional()
+  @IsInt()
   @Min(0)
   stock?: number;
 
