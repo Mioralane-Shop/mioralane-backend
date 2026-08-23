@@ -1,8 +1,14 @@
 import './env';
-import { connectDB } from './data-source';
-import createApp from './app.module';
+import { validate } from './config/env.validation';
 
 const startServer = async (): Promise<void> => {
+  validate(process.env);
+
+  const [{ connectDB }, { default: createApp }] = await Promise.all([
+    import('./data-source'),
+    import('./app.module'),
+  ]);
+
   console.log('⏳ Connecting to MongoDB...');
   await connectDB();
 
@@ -15,4 +21,10 @@ const startServer = async (): Promise<void> => {
   });
 };
 
-startServer();
+startServer().catch((error) => {
+  console.error(
+    'Failed to start Mioralane backend:',
+    error instanceof Error ? error.message : error
+  );
+  process.exit(1);
+});

@@ -1,6 +1,6 @@
 import { Router, RequestHandler } from 'express';
 import { protect, adminOnly } from '../middleware/auth.middleware';
-import { createCombo, getCombos, getComboByIdOrSlug, updateCombo } from './combo.controller';
+import { createCombo, deleteCombo, getCombos, getComboByIdOrSlug, updateCombo } from './combo.controller';
 
 const router = Router();
 
@@ -21,6 +21,13 @@ router.put(
     protect as RequestHandler,
     adminOnly as RequestHandler,
     updateCombo as RequestHandler
+);
+
+router.delete(
+    '/:id',
+    protect as RequestHandler,
+    adminOnly as RequestHandler,
+    deleteCombo as RequestHandler
 );
 
 export default router;
