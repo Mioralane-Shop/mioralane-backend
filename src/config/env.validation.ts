@@ -10,11 +10,7 @@ export const validate = (config: Record<string, unknown>) => {
     NODE_ENV: Joi.string()
       .valid('development', 'production', 'test')
       .default('development'),
-    DB_HOST: Joi.string().default('localhost'),
-    DB_PORT: Joi.number().default(5432),
-    DB_USERNAME: Joi.string().required(),
-    DB_PASSWORD: Joi.string().required(),
-    DB_DATABASE: Joi.string().required(),
+    MONGODB_URI: Joi.string().uri().required(),
     JWT_SECRET: Joi.string().required(),
     JWT_EXPIRES_IN: Joi.string().default('1d'),
   });
