@@ -3,6 +3,8 @@ import { Response } from 'express';
 import { OrderStatus } from '../enums/order-status.enum';
 import { UserModel } from '../auth/user.model';
 import { Order } from './order.model';
+import { Product } from '../product/product.model';
+import { Combo } from '../combo/combo.model';
 import { AuthenticatedRequest } from '../middleware/auth.middleware';
 import { getPaginationParams } from '../utils/pagination';
 
@@ -104,8 +106,61 @@ const ALLOWED_ORDER_STATUSES = Object.values(OrderStatus);
 
 const escapeRegex = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
+type HttpError = Error & { statusCode?: number };
+
+const createHttpError = (statusCode: number, message: string): HttpError => {
+  const error = new Error(message) as HttpError;
+  error.statusCode = statusCode;
+  return error;
+};
+
 const isValidOrderStatus = (status: unknown): status is OrderStatus =>
   typeof status === 'string' && ALLOWED_ORDER_STATUSES.includes(status as OrderStatus);
+
+const restoreCancelledOrderItemStock = async (
+  item: NonNullable<RawOrderRecord['items']>[number],
+  session: mongoose.ClientSession
+): Promise<void> => {
+  if (item.itemType !== 'product' && item.itemType !== 'combo') {
+    throw createHttpError(400, `Order item ${item.title ?? 'unknown item'} has an invalid itemType`);
+  }
+
+  if (!item.sourceId || !mongoose.Types.ObjectId.isValid(item.sourceId)) {
+    throw createHttpError(
+      400,
+      `Order item ${item.title ?? 'unknown item'} is missing a valid catalog reference`
+    );
+  }
+
+  const quantity = item.quantity ?? 0;
+
+  if (!Number.isInteger(quantity) || quantity <= 0) {
+    throw createHttpError(
+      400,
+      `Order item ${item.title ?? 'unknown item'} has an invalid quantity`
+    );
+  }
+
+  const updatedItem =
+    item.itemType === 'combo'
+      ? await Combo.findByIdAndUpdate(
+          item.sourceId,
+          { $inc: { stock: quantity } },
+          { new: true, session }
+        ).exec()
+      : await Product.findByIdAndUpdate(
+          item.sourceId,
+          { $inc: { stock: quantity } },
+          { new: true, session }
+        ).exec();
+
+  if (!updatedItem) {
+    throw createHttpError(
+      404,
+      `Referenced ${item.itemType} was not found for cancelled order item ${item.title ?? item.sourceId}`
+    );
+  }
+};
 
 const formatOrderUser = (user: RawOrderUser): AdminOrderUser | undefined => {
   if (!user || typeof user === 'string' || user instanceof mongoose.Types.ObjectId) {
@@ -339,37 +394,92 @@ export const updateAdminOrderStatus = async (
     return;
   }
 
-  const updatedOrder = (await Order.findByIdAndUpdate(
-    orderId,
-    { orderStatus: nextStatus },
-    { new: true, runValidators: true }
-  )
-    .lean()
-    .exec()) as RawOrderRecord | null;
+  const session = await mongoose.startSession();
 
-  if (!updatedOrder) {
-    res.status(404).json({ success: false, message: 'Order not found' });
-    return;
+  try {
+    const updatedOrder = (await session.withTransaction(async () => {
+      const order = await Order.findById(orderId).session(session).exec();
+
+      if (!order) {
+        throw createHttpError(404, 'Order not found');
+      }
+
+      const currentStatus = order.orderStatus ?? OrderStatus.PENDING;
+
+      if (currentStatus === OrderStatus.CANCELLED && nextStatus !== OrderStatus.CANCELLED) {
+        throw createHttpError(
+          400,
+          'Cancelled orders cannot be moved back to a fulfillment status'
+        );
+      }
+
+      if (currentStatus === nextStatus) {
+        return order.toObject() as RawOrderRecord;
+      }
+
+      if (nextStatus === OrderStatus.CANCELLED) {
+        for (const item of order.items) {
+          await restoreCancelledOrderItemStock(item as NonNullable<RawOrderRecord['items']>[number], session);
+        }
+      }
+
+      order.orderStatus = nextStatus;
+      await order.save({ session });
+
+      return order.toObject() as RawOrderRecord;
+    })) as RawOrderRecord;
+
+    const customer = await UserModel.findById(updatedOrder.user ?? undefined)
+      .select('username email role')
+      .lean()
+      .exec();
+
+    res.status(200).json({
+      success: true,
+      message: 'Order status updated successfully',
+      order: formatOrder({
+        ...updatedOrder,
+        user: customer
+          ? {
+              _id: customer._id,
+              username: customer.username,
+              email: customer.email,
+              role: customer.role,
+            }
+          : updatedOrder.user,
+      }),
+    });
+  } catch (error) {
+    const httpError = error as HttpError;
+    const transactionUnsupported =
+      error instanceof Error &&
+      /transaction numbers are only allowed|replica set|mongos|Transaction numbers/i.test(
+        error.message
+      );
+
+    if (transactionUnsupported) {
+      res.status(503).json({
+        success: false,
+        message:
+          'MongoDB transactions are not supported by the current deployment topology. Order cancellation cannot complete safely without a replica set or compatible MongoDB setup.',
+      });
+      return;
+    }
+
+    if (httpError.statusCode) {
+      res.status(httpError.statusCode).json({
+        success: false,
+        message: httpError.message,
+      });
+      return;
+    }
+
+    console.error('[updateAdminOrderStatus]', error);
+    res.status(500).json({
+      success: false,
+      message: 'Internal server error',
+    });
+  } finally {
+    await session.endSession();
   }
-
-  const customer = await UserModel.findById(updatedOrder.user ?? undefined)
-    .select('username email role')
-    .lean()
-    .exec();
-
-  res.status(200).json({
-    success: true,
-    message: 'Order status updated successfully',
-    order: formatOrder({
-      ...updatedOrder,
-      user: customer
-        ? {
-            _id: customer._id,
-            username: customer.username,
-            email: customer.email,
-            role: customer.role,
-          }
-        : updatedOrder.user,
-    }),
-  });
 };
