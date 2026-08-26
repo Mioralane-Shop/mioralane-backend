@@ -146,7 +146,7 @@ const ComboSchema = new Schema<IComboDocument>(
 
         rating: {
             type: Number,
-            default: 5.0,
+            default: 0,
             min: [0, 'Rating cannot be below 0'],
             max: [5, 'Rating cannot exceed 5'],
         },

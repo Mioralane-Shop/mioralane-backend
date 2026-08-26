@@ -266,7 +266,7 @@ const formatProduct = (product: ProductAggregateRow): ProductAggregateRow => {
  *                 type: number
  *                 minimum: 0
  *                 maximum: 5
- *                 default: 5.0
+ *                 default: 0
  *               numReviews:
  *                 type: number
  *                 default: 0

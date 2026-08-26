@@ -85,7 +85,7 @@ const isValidObjectId = (value: string): boolean => mongoose.Types.ObjectId.isVa
  *                 type: number
  *                 minimum: 0
  *                 maximum: 5
- *                 default: 5.0
+ *                 default: 0
  *               numReviews:
  *                 type: number
  *                 default: 0
@@ -115,7 +115,7 @@ const isValidObjectId = (value: string): boolean => mongoose.Types.ObjectId.isVa
  */
 export const createCombo = async (req: Request, res: Response): Promise<void> => {
     try {
-        const body = req.body as ICombo;
+        const body = req.body as Omit<ICombo, "rating" | "numReviews">;
 
         if (!body.title || !body.price) {
             res.status(400).json({
@@ -139,6 +139,8 @@ export const createCombo = async (req: Request, res: Response): Promise<void> =>
             category: body.category || 'combo',
             brand: body.brand || 'Mioralane Bundle',
             slug: slugify(body.title),
+            rating: 0,
+            numReviews: 0,
         };
 
         // Keep savings derived from the actual bundle prices
@@ -426,7 +428,7 @@ export const updateCombo = async (req: Request, res: Response): Promise<void> =>
         const allowed = [
             'badge', 'title', 'description', 'price', 'compareAtPrice', 'savings',
             'includedItems', 'routineTag', 'images', 'hoverImage', 'size', 'volume', 'stock',
-            'rating', 'numReviews', 'concerns', 'skinType', 'isBestSeller', 'isNewArrival',
+            'concerns', 'skinType', 'isBestSeller', 'isNewArrival',
         ];
         const sanitized: Record<string, any> = {};
         for (const key of allowed) {
