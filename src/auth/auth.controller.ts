@@ -8,8 +8,29 @@ import { UserModel } from './user.model';
 const JWT_SECRET = process.env.JWT_SECRET;
 const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '7d';
 const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || '';
+const DEFAULT_COOKIE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 
 const googleClient = new OAuth2Client(GOOGLE_CLIENT_ID);
+
+const resolveCookieMaxAge = (expiresIn: string): number => {
+  const match = expiresIn.trim().match(/^(\d+)([smhdw])$/i);
+
+  if (!match) {
+    return DEFAULT_COOKIE_MAX_AGE_MS;
+  }
+
+  const value = Number(match[1]);
+  const unit = match[2].toLowerCase();
+  const unitToMs: Record<string, number> = {
+    s: 1000,
+    m: 60 * 1000,
+    h: 60 * 60 * 1000,
+    d: 24 * 60 * 60 * 1000,
+    w: 7 * 24 * 60 * 60 * 1000,
+  };
+
+  return value * unitToMs[unit];
+};
 
 /**
  * Sets the JWT as an httpOnly cookie for enhanced security.
@@ -23,7 +44,7 @@ const setAuthCookie = (res: Response, token: string): void => {
     httpOnly: true,               // Not accessible via JavaScript (XSS protection)
     secure: isProduction,         // HTTPS only in production
     sameSite: isProduction ? 'none' : 'lax', // 'none' required for cross-domain (mioralane.com ↔ vercel.app)
-    maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
+    maxAge: resolveCookieMaxAge(JWT_EXPIRES_IN),
     path: '/',
   });
 };
