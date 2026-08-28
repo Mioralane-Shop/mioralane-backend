@@ -180,8 +180,6 @@ const formatProduct = (product: ProductAggregateRow): ProductAggregateRow => {
   if (formatted.salePrice != null) {
     formatted.compareAtPrice = formatted.price;
     formatted.price = formatted.salePrice;
-  } else {
-    formatted.compareAtPrice = Math.round(Number(formatted.price || 0) * 1.25);
   }
 
   delete formatted.salePrice;
