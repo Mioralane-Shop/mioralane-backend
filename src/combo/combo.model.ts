@@ -207,10 +207,6 @@ const ComboSchema = new Schema<IComboDocument>(
                     r.savings = r.compareAtPrice - r.price;
                 }
 
-                if (!r.compareAtPrice && r.savings > 0) {
-                    r.compareAtPrice = r.price + r.savings;
-                }
-
                 // Derive tag for badge rendering
                 if (r.isBestSeller) {
                     r.tag = 'best';
