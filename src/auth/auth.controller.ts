@@ -65,9 +65,7 @@ const generateToken = (payload: { id: string; role: 'user' | 'admin' }): string 
  * Builds a standard error message, taking DB connectivity into account.
  */
 const errorMessage = (): string =>
-  mongoose.connection.readyState !== 1
-    ? 'Database not connected — check MongoDB Atlas IP whitelist'
-    : 'Internal server error';
+  mongoose.connection.readyState !== 1 ? 'Service temporarily unavailable' : 'Internal server error';
 
 /**
  * @swagger
