@@ -14,6 +14,8 @@ interface ComboQueryParams {
 }
 
 const isValidObjectId = (value: string): boolean => mongoose.Types.ObjectId.isValid(value);
+const escapeRegex = (value: string): string =>
+    value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 /**
  * @swagger
@@ -258,11 +260,12 @@ export const getCombos = async (req: Request, res: Response): Promise<void> => {
         const filter: Record<string, any> = {};
 
         if (search) {
+            const regex = new RegExp(escapeRegex(search.trim()), 'i');
             filter.$or = [
-                { title: { $regex: search, $options: 'i' } },
-                { brand: { $regex: search, $options: 'i' } },
-                { description: { $regex: search, $options: 'i' } },
-                { badge: { $regex: search, $options: 'i' } },
+                { title: regex },
+                { brand: regex },
+                { description: regex },
+                { badge: regex },
             ];
         }
 
