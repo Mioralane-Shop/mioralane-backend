@@ -207,12 +207,8 @@ const ComboSchema = new Schema<IComboDocument>(
                     r.savings = r.compareAtPrice - r.price;
                 }
 
-                // compareAtPrice fallback — derived from savings if missing
                 if (!r.compareAtPrice && r.savings > 0) {
                     r.compareAtPrice = r.price + r.savings;
-                }
-                if (!r.compareAtPrice) {
-                    r.compareAtPrice = Math.round(r.price * 1.25);
                 }
 
                 // Derive tag for badge rendering

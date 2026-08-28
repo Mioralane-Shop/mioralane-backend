@@ -117,7 +117,7 @@ export const createCombo = async (req: Request, res: Response): Promise<void> =>
     try {
         const body = req.body as Omit<ICombo, "rating" | "numReviews">;
 
-        if (!body.title || !body.price) {
+        if (!body.title || body.price === undefined || body.price === null) {
             res.status(400).json({
                 success: false,
                 message: 'Missing required fields: title, price',

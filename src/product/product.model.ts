@@ -189,15 +189,9 @@ const ProductSchema = new Schema<IProductDocument>(
           r.tag = null;
         }
 
-        // ── Price mapping: if salePrice exists, swap ──
-        //    price → discounted selling price, compareAtPrice → original
         if (r.salePrice != null) {
           r.compareAtPrice = r.price;       // original (higher) price
           r.price = r.salePrice;            // current selling price
-        } else {
-          // Fallback: compute compareAtPrice as ~20% above price
-          // so discount badge & strikethrough always render
-          r.compareAtPrice = Math.round(r.price * 1.25);
         }
         delete r.salePrice;
 
