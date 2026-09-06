@@ -47,6 +47,17 @@ const normalizePhone = (value: string): string => value.trim().replace(/\s+/g, '
 const isValidZone = (zone: unknown): zone is DeliveryZone =>
   zone === 'inside_dhaka' || zone === 'outside_dhaka';
 
+const isValidPhone = (value: string): boolean => /^[0-9+\-\s()]+$/.test(value);
+
+const normalizeRequiredField = (value: unknown): string | null => {
+  if (typeof value !== 'string') {
+    return null;
+  }
+
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
+};
+
 const createHttpError = (statusCode: number, message: string): HttpError => {
   const error = new Error(message) as HttpError;
   error.statusCode = statusCode;
@@ -65,6 +76,7 @@ export const createOrder = async (req: AuthenticatedRequest, res: Response): Pro
   const items = body?.items;
   const shippingAddress = body?.shippingAddress;
   const paymentMethod = body?.paymentMethod ?? 'cash_on_delivery';
+  const deliveryZone = shippingAddress?.deliveryZone;
 
   if (!Array.isArray(items) || items.length === 0) {
     res.status(400).json({ success: false, message: 'Order items are required' });
@@ -77,11 +89,11 @@ export const createOrder = async (req: AuthenticatedRequest, res: Response): Pro
   }
 
   if (
-    !shippingAddress?.name ||
-    !shippingAddress.phone ||
-    !shippingAddress.area ||
-    !shippingAddress.address ||
-    !isValidZone(shippingAddress.deliveryZone)
+    !normalizeRequiredField(shippingAddress?.name) ||
+    !normalizeRequiredField(shippingAddress?.phone) ||
+    !normalizeRequiredField(shippingAddress?.area) ||
+    !normalizeRequiredField(shippingAddress?.address) ||
+    !isValidZone(deliveryZone)
   ) {
     res.status(400).json({
       success: false,
@@ -97,6 +109,19 @@ export const createOrder = async (req: AuthenticatedRequest, res: Response): Pro
     area: string;
     address: string;
   };
+
+  const normalizedName = validatedShippingAddress.name.trim();
+  const normalizedPhone = normalizePhone(validatedShippingAddress.phone);
+  const normalizedArea = validatedShippingAddress.area.trim();
+  const normalizedAddress = validatedShippingAddress.address.trim();
+
+  if (!isValidPhone(normalizedPhone)) {
+    res.status(400).json({
+      success: false,
+      message: 'Phone number contains invalid characters',
+    });
+    return;
+  }
 
   const normalizedItems = items
     .map((item) => ({
@@ -145,7 +170,7 @@ export const createOrder = async (req: AuthenticatedRequest, res: Response): Pro
                 .exec()
             : await Product.findById(item.itemId)
                 .session(session)
-                .select('_id title price images stock')
+                .select('_id title price salePrice images stock')
                 .exec();
 
         if (!sourceDoc) {
@@ -162,12 +187,17 @@ export const createOrder = async (req: AuthenticatedRequest, res: Response): Pro
           );
         }
 
-          resolvedItems.push({
+        resolvedItems.push({
           itemType: item.itemType,
           itemId: item.itemId as string,
           sourceId: sourceDoc._id,
           title: sourceDoc.title ?? (item.itemId as string),
-          price: sourceDoc.price,
+          price: (() => {
+            const productDoc = sourceDoc as { salePrice?: number; price: number };
+            return item.itemType === 'product' && productDoc.salePrice != null
+              ? productDoc.salePrice
+              : productDoc.price;
+          })(),
           thumbnail: sourceDoc.images?.[0] ?? '',
           quantity: item.quantity,
         });
@@ -212,11 +242,11 @@ export const createOrder = async (req: AuthenticatedRequest, res: Response): Pro
               thumbnail: item.thumbnail,
             })),
             shippingAddress: {
-              name: validatedShippingAddress.name.trim(),
-              phone: normalizePhone(validatedShippingAddress.phone),
+              name: normalizedName,
+              phone: normalizedPhone,
               deliveryZone: validatedShippingAddress.deliveryZone,
-              area: validatedShippingAddress.area.trim(),
-              address: validatedShippingAddress.address.trim(),
+              area: normalizedArea,
+              address: normalizedAddress,
             },
             itemsTotal,
             shippingFee,

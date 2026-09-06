@@ -25,7 +25,7 @@ export const connectDB = async (): Promise<typeof mongoose> => {
     throw new Error('❌ MONGODB_URI is not defined in environment variables.');
   }
 
-  console.log('⏳ Connecting to MongoDB...');
+  console.log('Connecting to MongoDB...');
   cachedPromise = mongoose.connect(MONGODB_URI, {
     serverSelectionTimeoutMS: 5000,
     connectTimeoutMS: 5000,
@@ -33,12 +33,12 @@ export const connectDB = async (): Promise<typeof mongoose> => {
 
   try {
     const instance = await cachedPromise;
-    console.log('✅ MongoDB Connected Successfully!');
+    console.log('MongoDB connected successfully');
     return instance;
   } catch (error) {
     // Reset cache on failure so next invocation can retry
     cachedPromise = null;
-    console.error('❌ MongoDB connection failed.');
+    console.error('MongoDB connection failed.', error);
     throw error;
   }
 };

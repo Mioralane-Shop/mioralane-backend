@@ -9,6 +9,8 @@ import orderRoutes from './order/order.routes';
 import adminOrderRoutes from './order/admin-order.routes';
 import adminCustomerRoutes from './customer/admin-customer.routes';
 import adminDashboardRoutes from './dashboard/admin-dashboard.routes';
+import mediaRoutes from './media/media.routes';
+import imageKitRoutes from './imagekit/imagekit.module';
 import wishlistRoutes from './wishlist/wishlist.routes';
 import { authLimiter } from './middleware/rateLimiter.middleware';
 import { swaggerSpec, swaggerServe, swaggerSetup } from './swagger';
@@ -47,7 +49,7 @@ const createApp = (): express.Application => {
         }
       },
       credentials: true,
-      methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+      methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
       allowedHeaders: ['Content-Type', 'Authorization'],
     })
   );
@@ -109,6 +111,15 @@ const createApp = (): express.Application => {
 
   // Wishlist routes (authenticated user flow)
   app.use('/api/wishlist', wishlistRoutes);
+
+  // Real reusable media upload/delete routes for product and combo assets
+  app.use('/api/media', mediaRoutes);
+
+  // Temporary development-only ImageKit upload test route
+  if (process.env.NODE_ENV !== 'production') {
+    // Deprecated dev-only smoke test route retained for backward verification.
+    app.use('/api/imagekit', imageKitRoutes);
+  }
 
   // Health check
   app.get('/api/health', (_req, res) => {
