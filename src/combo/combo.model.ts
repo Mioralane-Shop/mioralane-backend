@@ -1,5 +1,7 @@
 import mongoose, { Schema, Document, Model } from 'mongoose';
 import { slugify } from '../utils/slugify';
+import { MediaAssetSchema } from '../media/media.schema';
+import type { MediaAsset } from '../media/media.types';
 
 const integerStockValidator = {
     validator: Number.isInteger,
@@ -31,6 +33,7 @@ export interface ICombo {
     skinType: string;             // e.g. "All skin types", "Oily / Acne-prone"
     isBestSeller: boolean;
     isNewArrival: boolean;
+    media?: MediaAsset[];
 }
 
 export interface IComboDocument extends ICombo, Document {
@@ -119,6 +122,11 @@ const ComboSchema = new Schema<IComboDocument>(
             },
         },
 
+        media: {
+            type: [MediaAssetSchema],
+            default: [],
+        },
+
         hoverImage: {
             type: String,
             default: '',
@@ -193,6 +201,14 @@ const ComboSchema = new Schema<IComboDocument>(
                 // ── Field aliases for frontend ProductCard compatibility ──
                 r.name = r.title;                            // ProductCard renders product.name
                 r.reviewCount = r.numReviews;                // ProductCard expects reviewCount
+                r.media = Array.isArray(r.media) ? r.media : [];
+                if (r.media.length > 0) {
+                    r.images = r.media
+                        .map((asset: MediaAsset) => asset.url)
+                        .filter((url: string) => typeof url === 'string' && url.trim().length > 0);
+                } else {
+                    r.images = Array.isArray(r.images) ? r.images : [];
+                }
 
                 // Volume: fall back to size if volume is empty
                 if (!r.volume && r.size) {
@@ -229,6 +245,12 @@ ComboSchema.index({ title: 'text', brand: 'text', category: 'text' });
 // ─── Pre-save hook: auto-generate slug ────────────────────────────────────
 
 ComboSchema.pre<IComboDocument>('save', async function () {
+    if (Array.isArray(this.media) && this.media.length > 0) {
+        this.images = this.media
+            .map((asset) => asset.url)
+            .filter((url): url is string => typeof url === 'string' && url.trim().length > 0);
+    }
+
     if (this.isModified('title') || !this.slug) {
         let baseSlug = slugify(this.title);
         let candidate = baseSlug;

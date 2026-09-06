@@ -3,6 +3,8 @@ import { Combo, ICombo } from './combo.model';
 import { getPaginationParams } from '../utils/pagination';
 import { slugify } from '../utils/slugify';
 import mongoose from 'mongoose';
+import { extractMediaUrls, normalizeMediaAssets } from '../media/media.utils';
+import type { MediaAsset } from '../media/media.types';
 
 // ─── Types ────────────────────────────────────────────────────────────────
 
@@ -118,6 +120,7 @@ const escapeRegex = (value: string): string =>
 export const createCombo = async (req: Request, res: Response): Promise<void> => {
     try {
         const body = req.body as Omit<ICombo, "rating" | "numReviews">;
+        const media = normalizeMediaAssets((body as Record<string, unknown>).media);
 
         if (!body.title || body.price === undefined || body.price === null) {
             res.status(400).json({
@@ -127,10 +130,15 @@ export const createCombo = async (req: Request, res: Response): Promise<void> =>
             return;
         }
 
+        if (media.length > 0) {
+            body.media = media as MediaAsset[];
+            body.images = extractMediaUrls(media);
+        }
+
         if (!body.images || body.images.length === 0) {
             res.status(400).json({
                 success: false,
-                message: 'At least one image URL is required',
+                message: 'At least one image URL or media asset is required',
             });
             return;
         }
@@ -418,6 +426,7 @@ export const updateCombo = async (req: Request, res: Response): Promise<void> =>
     try {
         const { id } = req.params as { id: string };
         const updates = req.body;
+        const media = normalizeMediaAssets(updates.media);
 
         if (!isValidObjectId(id)) {
             res.status(400).json({
@@ -430,7 +439,7 @@ export const updateCombo = async (req: Request, res: Response): Promise<void> =>
         // Only allow specific fields to be updated
         const allowed = [
             'badge', 'title', 'description', 'price', 'compareAtPrice', 'savings',
-            'includedItems', 'routineTag', 'images', 'hoverImage', 'size', 'volume', 'stock',
+            'includedItems', 'routineTag', 'images', 'media', 'hoverImage', 'size', 'volume', 'stock',
             'concerns', 'skinType', 'isBestSeller', 'isNewArrival',
         ];
         const sanitized: Record<string, any> = {};
@@ -438,6 +447,11 @@ export const updateCombo = async (req: Request, res: Response): Promise<void> =>
             if (updates[key] !== undefined) {
                 sanitized[key] = updates[key];
             }
+        }
+
+        if (media.length > 0) {
+            sanitized.media = media;
+            sanitized.images = extractMediaUrls(media);
         }
 
         const combo = await Combo.findById(id);

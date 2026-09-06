@@ -13,6 +13,9 @@ export const validate = (config: Record<string, unknown>) => {
     MONGODB_URI: Joi.string().uri().required(),
     JWT_SECRET: Joi.string().required(),
     JWT_EXPIRES_IN: Joi.string().default('7d'),
+    IMAGEKIT_URL_ENDPOINT: Joi.string().uri().required(),
+    IMAGEKIT_PUBLIC_KEY: Joi.string().required(),
+    IMAGEKIT_PRIVATE_KEY: Joi.string().required(),
   });
 
   const { error, value } = schema.validate(config, { allowUnknown: true });

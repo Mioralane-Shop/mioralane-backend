@@ -3,6 +3,8 @@ import { Product, IProduct, IProductDocument } from './product.model';
 import { getPaginationParams } from '../utils/pagination';
 import { slugify } from '../utils/slugify';
 import mongoose from 'mongoose';
+import { extractMediaUrls, normalizeMediaAssets } from '../media/media.utils';
+import type { MediaAsset } from '../media/media.types';
 
 // ─── Types ────────────────────────────────────────────────────────────────
 
@@ -39,6 +41,7 @@ type ProductMutationBody = Partial<
     | 'salePrice'
     | 'badge'
     | 'images'
+    | 'media'
     | 'hoverImage'
     | 'volume'
     | 'stock'
@@ -60,6 +63,7 @@ const mutationFields: (keyof ProductMutationBody)[] = [
   'salePrice',
   'badge',
   'images',
+  'media',
   'hoverImage',
   'volume',
   'stock',
@@ -99,6 +103,14 @@ const sanitizeMutationBody = (body: Record<string, unknown>): ProductMutationBod
   }
 
   return sanitized;
+};
+
+const normalizeProductMedia = (body: ProductMutationBody): void => {
+  const media = normalizeMediaAssets((body as Record<string, unknown>).media);
+  if (media.length > 0) {
+    body.media = media as MediaAsset[];
+    body.images = extractMediaUrls(media);
+  }
 };
 
 const resolveSlug = (body: ProductMutationBody, fallbackTitle?: string): string => {
@@ -292,6 +304,7 @@ const formatProduct = (product: ProductAggregateRow): ProductAggregateRow => {
 export const createProduct = async (req: Request, res: Response): Promise<void> => {
   try {
     const body = sanitizeMutationBody((req.body ?? {}) as Record<string, unknown>);
+    normalizeProductMedia(body);
 
     // Validate required fields
     if (!body.title || !body.brand || !body.category || body.price === undefined || body.price === null) {
@@ -305,7 +318,7 @@ export const createProduct = async (req: Request, res: Response): Promise<void> 
     if (!body.images || body.images.length === 0) {
       res.status(400).json({
         success: false,
-        message: 'At least one image URL is required',
+        message: 'At least one image URL or media asset is required',
       });
       return;
     }
@@ -390,6 +403,7 @@ export const updateProduct = async (req: Request, res: Response): Promise<void> 
     }
 
     const body = sanitizeMutationBody((req.body ?? {}) as Record<string, unknown>);
+    normalizeProductMedia(body);
 
     if (
       (body.title !== undefined && body.title.trim() === '') ||
