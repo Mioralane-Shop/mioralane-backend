@@ -3,6 +3,8 @@ import { Combo, ICombo } from './combo.model';
 import { getPaginationParams } from '../utils/pagination';
 import { slugify } from '../utils/slugify';
 import mongoose from 'mongoose';
+import { extractMediaUrls, normalizeMediaAssets } from '../media/media.utils';
+import type { MediaAsset } from '../media/media.types';
 
 // ─── Types ────────────────────────────────────────────────────────────────
 
@@ -14,6 +16,8 @@ interface ComboQueryParams {
 }
 
 const isValidObjectId = (value: string): boolean => mongoose.Types.ObjectId.isValid(value);
+const escapeRegex = (value: string): string =>
+    value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 /**
  * @swagger
@@ -85,7 +89,7 @@ const isValidObjectId = (value: string): boolean => mongoose.Types.ObjectId.isVa
  *                 type: number
  *                 minimum: 0
  *                 maximum: 5
- *                 default: 5.0
+ *                 default: 0
  *               numReviews:
  *                 type: number
  *                 default: 0
@@ -115,9 +119,10 @@ const isValidObjectId = (value: string): boolean => mongoose.Types.ObjectId.isVa
  */
 export const createCombo = async (req: Request, res: Response): Promise<void> => {
     try {
-        const body = req.body as ICombo;
+        const body = req.body as Omit<ICombo, "rating" | "numReviews">;
+        const media = normalizeMediaAssets((body as Record<string, unknown>).media);
 
-        if (!body.title || !body.price) {
+        if (!body.title || body.price === undefined || body.price === null) {
             res.status(400).json({
                 success: false,
                 message: 'Missing required fields: title, price',
@@ -125,10 +130,15 @@ export const createCombo = async (req: Request, res: Response): Promise<void> =>
             return;
         }
 
+        if (media.length > 0) {
+            body.media = media as MediaAsset[];
+            body.images = extractMediaUrls(media);
+        }
+
         if (!body.images || body.images.length === 0) {
             res.status(400).json({
                 success: false,
-                message: 'At least one image URL is required',
+                message: 'At least one image URL or media asset is required',
             });
             return;
         }
@@ -139,6 +149,8 @@ export const createCombo = async (req: Request, res: Response): Promise<void> =>
             category: body.category || 'combo',
             brand: body.brand || 'Mioralane Bundle',
             slug: slugify(body.title),
+            rating: 0,
+            numReviews: 0,
         };
 
         // Keep savings derived from the actual bundle prices
@@ -256,11 +268,12 @@ export const getCombos = async (req: Request, res: Response): Promise<void> => {
         const filter: Record<string, any> = {};
 
         if (search) {
+            const regex = new RegExp(escapeRegex(search.trim()), 'i');
             filter.$or = [
-                { title: { $regex: search, $options: 'i' } },
-                { brand: { $regex: search, $options: 'i' } },
-                { description: { $regex: search, $options: 'i' } },
-                { badge: { $regex: search, $options: 'i' } },
+                { title: regex },
+                { brand: regex },
+                { description: regex },
+                { badge: regex },
             ];
         }
 
@@ -413,6 +426,7 @@ export const updateCombo = async (req: Request, res: Response): Promise<void> =>
     try {
         const { id } = req.params as { id: string };
         const updates = req.body;
+        const media = normalizeMediaAssets(updates.media);
 
         if (!isValidObjectId(id)) {
             res.status(400).json({
@@ -425,14 +439,19 @@ export const updateCombo = async (req: Request, res: Response): Promise<void> =>
         // Only allow specific fields to be updated
         const allowed = [
             'badge', 'title', 'description', 'price', 'compareAtPrice', 'savings',
-            'includedItems', 'routineTag', 'images', 'hoverImage', 'size', 'volume', 'stock',
-            'rating', 'numReviews', 'concerns', 'skinType', 'isBestSeller', 'isNewArrival',
+            'includedItems', 'routineTag', 'images', 'media', 'hoverImage', 'size', 'volume', 'stock',
+            'concerns', 'skinType', 'isBestSeller', 'isNewArrival',
         ];
         const sanitized: Record<string, any> = {};
         for (const key of allowed) {
             if (updates[key] !== undefined) {
                 sanitized[key] = updates[key];
             }
+        }
+
+        if (media.length > 0) {
+            sanitized.media = media;
+            sanitized.images = extractMediaUrls(media);
         }
 
         const combo = await Combo.findById(id);

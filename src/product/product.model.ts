@@ -1,5 +1,7 @@
 import mongoose, { Schema, Document, Model } from 'mongoose';
 import { slugify } from '../utils/slugify';
+import { MediaAssetSchema } from '../media/media.schema';
+import type { MediaAsset } from '../media/media.types';
 
 const integerStockValidator = {
   validator: Number.isInteger,
@@ -30,6 +32,7 @@ export interface IProduct {
   isTrending: boolean;
   rating: number;
   numReviews: number;
+  media?: MediaAsset[];
 }
 
 export interface IProductDocument extends IProduct, Document {
@@ -117,6 +120,11 @@ const ProductSchema = new Schema<IProductDocument>(
       },
     },
 
+    media: {
+      type: [MediaAssetSchema],
+      default: [],
+    },
+
     hoverImage: {
       type: String,
       default: '',
@@ -151,7 +159,7 @@ const ProductSchema = new Schema<IProductDocument>(
 
     rating: {
       type: Number,
-      default: 5.0,
+      default: 0,
       min: [0, 'Rating cannot be below 0'],
       max: [5, 'Rating cannot exceed 5'],
     },
@@ -179,6 +187,14 @@ const ProductSchema = new Schema<IProductDocument>(
         r.concerns = r.skinConcern;                   // ProductCard renders product.concerns
         r.reviewCount = r.numReviews;                 // ProductCard expects reviewCount
         r.description = r.description || '';          // ensure string
+        r.media = Array.isArray(r.media) ? r.media : [];
+        if (r.media.length > 0) {
+          r.images = r.media
+            .map((asset: MediaAsset) => asset.url)
+            .filter((url: string) => typeof url === 'string' && url.trim().length > 0);
+        } else {
+          r.images = Array.isArray(r.images) ? r.images : [];
+        }
 
         // Derive tag for badge rendering (best > new > sale)
         if (r.isBestSeller || r.badge === 'Best') {
@@ -189,15 +205,9 @@ const ProductSchema = new Schema<IProductDocument>(
           r.tag = null;
         }
 
-        // ── Price mapping: if salePrice exists, swap ──
-        //    price → discounted selling price, compareAtPrice → original
         if (r.salePrice != null) {
           r.compareAtPrice = r.price;       // original (higher) price
           r.price = r.salePrice;            // current selling price
-        } else {
-          // Fallback: compute compareAtPrice as ~20% above price
-          // so discount badge & strikethrough always render
-          r.compareAtPrice = Math.round(r.price * 1.25);
         }
         delete r.salePrice;
 
@@ -221,6 +231,12 @@ ProductSchema.index({ title: 'text', brand: 'text', category: 'text' });
 // ─── Pre-save hook: auto-generate slug ────────────────────────────────────
 
 ProductSchema.pre<IProductDocument>('save', async function () {
+  if (Array.isArray(this.media) && this.media.length > 0) {
+    this.images = this.media
+      .map((asset) => asset.url)
+      .filter((url): url is string => typeof url === 'string' && url.trim().length > 0);
+  }
+
   if (this.isModified('title') || !this.slug) {
     let baseSlug = slugify(this.title);
     let candidate = baseSlug;
