@@ -35,6 +35,9 @@ type ProductMutationBody = Partial<
     | 'brand'
     | 'category'
     | 'description'
+    | 'ingredients'
+    | 'howToUse'
+    | 'keyIngredients'
     | 'skinType'
     | 'skinConcern'
     | 'price'
@@ -57,6 +60,9 @@ const mutationFields: (keyof ProductMutationBody)[] = [
   'brand',
   'category',
   'description',
+  'ingredients',
+  'howToUse',
+  'keyIngredients',
   'skinType',
   'skinConcern',
   'price',
@@ -90,6 +96,59 @@ const parseNullableNumber = (value?: string): number | undefined => {
   return Number.isFinite(parsed) ? parsed : undefined;
 };
 
+const normalizeOptionalString = (value: unknown): string | undefined => {
+  if (typeof value !== 'string') {
+    return undefined;
+  }
+
+  const trimmed = value.trim();
+  return trimmed ? trimmed : undefined;
+};
+
+const normalizeKeyIngredients = (
+  value: unknown
+): Array<{
+  name: string;
+  benefit?: string;
+}> | undefined => {
+  if (value === undefined) {
+    return undefined;
+  }
+
+  if (!Array.isArray(value)) {
+    throw new Error('Key ingredients must be an array.');
+  }
+
+  const normalized: Array<{
+    name: string;
+    benefit?: string;
+  }> = [];
+
+  for (const row of value) {
+    if (!row || typeof row !== 'object') {
+      continue;
+    }
+
+    const candidate = row as Record<string, unknown>;
+    const name = normalizeOptionalString(candidate.name);
+    const benefit = normalizeOptionalString(candidate.benefit);
+
+    if (!name && !benefit) {
+      continue;
+    }
+
+    if (!name) {
+      throw new Error('Each key ingredient row requires a non-empty name.');
+    }
+
+    normalized.push(
+      benefit ? { name, benefit } : { name }
+    );
+  }
+
+  return normalized;
+};
+
 const isValidObjectId = (value: string): boolean => mongoose.Types.ObjectId.isValid(value);
 
 const sanitizeMutationBody = (body: Record<string, unknown>): ProductMutationBody => {
@@ -110,6 +169,16 @@ const normalizeProductMedia = (body: ProductMutationBody): void => {
   if (media.length > 0) {
     body.media = media as MediaAsset[];
     body.images = extractMediaUrls(media);
+  }
+};
+
+const normalizeSkincareFields = (body: ProductMutationBody): void => {
+  body.ingredients = normalizeOptionalString(body.ingredients);
+  body.howToUse = normalizeOptionalString(body.howToUse);
+
+  const keyIngredients = normalizeKeyIngredients(body.keyIngredients);
+  if (keyIngredients !== undefined) {
+    body.keyIngredients = keyIngredients;
   }
 };
 
@@ -305,9 +374,10 @@ export const createProduct = async (req: Request, res: Response): Promise<void> 
   try {
     const body = sanitizeMutationBody((req.body ?? {}) as Record<string, unknown>);
     normalizeProductMedia(body);
+    normalizeSkincareFields(body);
 
     // Validate required fields
-    if (!body.title || !body.brand || !body.category || body.price === undefined || body.price === null) {
+  if (!body.title || !body.brand || !body.category || body.price === undefined || body.price === null) {
       res.status(400).json({
         success: false,
         message: 'Missing required fields: title, brand, category, price',
@@ -343,6 +413,24 @@ export const createProduct = async (req: Request, res: Response): Promise<void> 
       product,
     });
   } catch (error: any) {
+    if (error instanceof Error && error.message === 'Key ingredients must be an array.') {
+      res.status(400).json({
+        success: false,
+        message: 'Validation failed',
+        errors: [error.message],
+      });
+      return;
+    }
+
+    if (error instanceof Error && error.message === 'Each key ingredient row requires a non-empty name.') {
+      res.status(400).json({
+        success: false,
+        message: 'Validation failed',
+        errors: [error.message],
+      });
+      return;
+    }
+
     // Duplicate key (slug collision)
     if (error.code === 11000) {
       res.status(409).json({
@@ -404,6 +492,7 @@ export const updateProduct = async (req: Request, res: Response): Promise<void> 
 
     const body = sanitizeMutationBody((req.body ?? {}) as Record<string, unknown>);
     normalizeProductMedia(body);
+    normalizeSkincareFields(body);
 
     if (
       (body.title !== undefined && body.title.trim() === '') ||
@@ -439,6 +528,24 @@ export const updateProduct = async (req: Request, res: Response): Promise<void> 
       product,
     });
   } catch (error: any) {
+    if (error instanceof Error && error.message === 'Key ingredients must be an array.') {
+      res.status(400).json({
+        success: false,
+        message: 'Validation failed',
+        errors: [error.message],
+      });
+      return;
+    }
+
+    if (error instanceof Error && error.message === 'Each key ingredient row requires a non-empty name.') {
+      res.status(400).json({
+        success: false,
+        message: 'Validation failed',
+        errors: [error.message],
+      });
+      return;
+    }
+
     if (error.code === 11000) {
       res.status(409).json({
         success: false,
