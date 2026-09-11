@@ -6,6 +6,14 @@ import { Combo } from '../combo/combo.model';
 import { Order, DeliveryZone, OrderItemType, PaymentMethod } from './order.model';
 import { AuthenticatedRequest } from '../middleware/auth.middleware';
 import { OrderStatus } from '../enums/order-status.enum';
+import { CouponUsage } from '../promotion/coupon-usage.model';
+import {
+  calculateAutomaticPromotion,
+  DiscountableOrderItem,
+  reserveCouponUsage,
+  selectBetterSinglePromotion,
+  validateCouponForOrder,
+} from '../promotion/promotion.service';
 
 type OrderPayloadItem = {
   itemId?: string;
@@ -27,6 +35,7 @@ type CreateOrderBody = {
     address?: string;
   };
   paymentMethod?: PaymentMethod;
+  couponCode?: string;
 };
 
 type HttpError = Error & { statusCode?: number };
@@ -152,6 +161,8 @@ export const createOrder = async (req: AuthenticatedRequest, res: Response): Pro
         price: number;
         thumbnail: string;
         quantity: number;
+        originalPrice?: number;
+        category?: string;
       }> = [];
 
       for (const item of normalizedItems) {
@@ -166,11 +177,11 @@ export const createOrder = async (req: AuthenticatedRequest, res: Response): Pro
           item.itemType === 'combo'
             ? await Combo.findById(item.itemId)
                 .session(session)
-                .select('_id title price images stock')
+                .select('_id title price images stock category')
                 .exec()
             : await Product.findById(item.itemId)
                 .session(session)
-                .select('_id title price salePrice images stock')
+                .select('_id title price salePrice images stock category')
                 .exec();
 
         if (!sourceDoc) {
@@ -187,19 +198,22 @@ export const createOrder = async (req: AuthenticatedRequest, res: Response): Pro
           );
         }
 
+        const productDoc = sourceDoc as { salePrice?: number; price: number; category?: string };
+        const sellingPrice =
+          item.itemType === 'product' && productDoc.salePrice != null
+            ? productDoc.salePrice
+            : productDoc.price;
+
         resolvedItems.push({
           itemType: item.itemType,
           itemId: item.itemId as string,
           sourceId: sourceDoc._id,
           title: sourceDoc.title ?? (item.itemId as string),
-          price: (() => {
-            const productDoc = sourceDoc as { salePrice?: number; price: number };
-            return item.itemType === 'product' && productDoc.salePrice != null
-              ? productDoc.salePrice
-              : productDoc.price;
-          })(),
+          price: sellingPrice,
           thumbnail: sourceDoc.images?.[0] ?? '',
           quantity: item.quantity,
+          originalPrice: productDoc.price,
+          category: productDoc.category,
         });
       }
 
@@ -223,8 +237,36 @@ export const createOrder = async (req: AuthenticatedRequest, res: Response): Pro
       }
 
       const itemsTotal = resolvedItems.reduce((sum, item) => sum + item.price * item.quantity, 0);
-      const shippingFee = SHIPPING_FEES[validatedShippingAddress.deliveryZone];
-      const totalAmount = itemsTotal + shippingFee;
+      const discountItems: DiscountableOrderItem[] = resolvedItems.map((item) => ({
+        itemType: item.itemType,
+        sourceId: item.sourceId,
+        title: item.title,
+        quantity: item.quantity,
+        price: item.price,
+        originalPrice: item.originalPrice,
+        category: item.category,
+      }));
+
+      const automaticPromotion = await calculateAutomaticPromotion(discountItems, itemsTotal, userId, session);
+      const couponCode = typeof body?.couponCode === 'string' ? body.couponCode.trim() : '';
+      const couponPromotion = couponCode
+        ? await validateCouponForOrder({
+            couponCode,
+            userId,
+            items: discountItems,
+            itemsTotal,
+            session,
+          })
+        : undefined;
+      const baseShippingFee = SHIPPING_FEES[validatedShippingAddress.deliveryZone];
+      const selectedPromotion = selectBetterSinglePromotion(
+        automaticPromotion,
+        couponPromotion,
+        baseShippingFee
+      );
+      const discountAmount = Math.min(selectedPromotion.discountAmount, itemsTotal);
+      const shippingFee = selectedPromotion.freeDelivery ? 0 : baseShippingFee;
+      const totalAmount = Math.max(itemsTotal - discountAmount, 0) + shippingFee;
 
       const [order] = await Order.create(
         [
@@ -249,8 +291,11 @@ export const createOrder = async (req: AuthenticatedRequest, res: Response): Pro
               address: normalizedAddress,
             },
             itemsTotal,
+            discountAmount,
             shippingFee,
             totalAmount,
+            promotion: selectedPromotion.promotion,
+            coupon: selectedPromotion.coupon,
             paymentMethod,
             paymentStatus: 'pending',
             orderStatus: OrderStatus.PENDING,
@@ -258,6 +303,22 @@ export const createOrder = async (req: AuthenticatedRequest, res: Response): Pro
         ],
         { session }
       );
+
+      if (selectedPromotion.coupon) {
+        await reserveCouponUsage({ _id: selectedPromotion.coupon.couponId }, session);
+        await CouponUsage.create(
+          [
+            {
+              couponId: selectedPromotion.coupon.couponId,
+              userId: new mongoose.Types.ObjectId(userId),
+              orderId: order._id,
+              discountAmount: selectedPromotion.coupon.discountAmount,
+              usedAt: new Date(),
+            },
+          ],
+          { session }
+        );
+      }
 
       return order;
     });

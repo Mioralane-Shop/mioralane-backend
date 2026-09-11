@@ -31,8 +31,21 @@ export interface IOrder {
   items: IOrderItem[];
   shippingAddress: IShippingAddress;
   itemsTotal: number;
+  discountAmount: number;
   shippingFee: number;
   totalAmount: number;
+  promotion?: {
+    campaignId?: mongoose.Types.ObjectId;
+    campaignName?: string;
+    campaignType?: string;
+  };
+  coupon?: {
+    couponId?: mongoose.Types.ObjectId;
+    code?: string;
+    discountType?: string;
+    discountValue?: number;
+    discountAmount?: number;
+  };
   paymentMethod: PaymentMethod;
   paymentStatus: PaymentStatus;
   orderStatus: OrderStatus;
@@ -152,6 +165,11 @@ const OrderSchema = new Schema<IOrderDocument>(
       required: true,
       min: 0,
     },
+    discountAmount: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
     shippingFee: {
       type: Number,
       required: true,
@@ -166,6 +184,50 @@ const OrderSchema = new Schema<IOrderDocument>(
       type: String,
       enum: ['cash_on_delivery'],
       default: 'cash_on_delivery',
+    },
+    promotion: {
+      campaignId: {
+        type: Schema.Types.ObjectId,
+        ref: 'PromotionCampaign',
+        default: undefined,
+      },
+      campaignName: {
+        type: String,
+        trim: true,
+        default: undefined,
+      },
+      campaignType: {
+        type: String,
+        trim: true,
+        default: undefined,
+      },
+    },
+    coupon: {
+      couponId: {
+        type: Schema.Types.ObjectId,
+        ref: 'Coupon',
+        default: undefined,
+      },
+      code: {
+        type: String,
+        trim: true,
+        default: undefined,
+      },
+      discountType: {
+        type: String,
+        trim: true,
+        default: undefined,
+      },
+      discountValue: {
+        type: Number,
+        min: 0,
+        default: undefined,
+      },
+      discountAmount: {
+        type: Number,
+        min: 0,
+        default: undefined,
+      },
     },
     paymentStatus: {
       type: String,

@@ -1,5 +1,5 @@
 export type MediaAssetProvider = 'imagekit';
-export type MediaAssetType = 'product' | 'combo';
+export type MediaAssetType = 'product' | 'combo' | 'campaign';
 
 export interface MediaAsset {
   provider: MediaAssetProvider;

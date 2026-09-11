@@ -25,7 +25,7 @@ type MulterFile = {
 
 const MAX_MEDIA_UPLOAD_SIZE_BYTES = 8 * 1024 * 1024;
 
-const ALLOWED_ASSET_TYPES: MediaAssetType[] = ['product', 'combo'];
+const ALLOWED_ASSET_TYPES: MediaAssetType[] = ['product', 'combo', 'campaign'];
 
 const getStatusCode = (error: unknown): number => {
   if (error instanceof BadRequestError) return 400;
@@ -73,7 +73,7 @@ export class MediaController {
       if (!assetType) {
         res.status(400).json({
           success: false,
-          message: 'assetType must be either product or combo',
+          message: 'assetType must be product, combo, or campaign',
         });
         return;
       }

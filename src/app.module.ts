@@ -12,6 +12,11 @@ import adminDashboardRoutes from './dashboard/admin-dashboard.routes';
 import mediaRoutes from './media/media.routes';
 import imageKitRoutes from './imagekit/imagekit.module';
 import wishlistRoutes from './wishlist/wishlist.routes';
+import {
+  adminCampaignRoutes,
+  adminCouponRoutes,
+  promotionPublicRoutes,
+} from './promotion/promotion.routes';
 import { authLimiter } from './middleware/rateLimiter.middleware';
 import { swaggerSpec, swaggerServe, swaggerSetup } from './swagger';
 
@@ -108,6 +113,11 @@ const createApp = (): express.Application => {
 
   // Admin dashboard summary
   app.use('/api/admin/dashboard', adminDashboardRoutes);
+
+  // Promotion campaign and coupon management
+  app.use('/api/admin/campaigns', adminCampaignRoutes);
+  app.use('/api/admin/coupons', adminCouponRoutes);
+  app.use('/api/promotions', promotionPublicRoutes);
 
   // Wishlist routes (authenticated user flow)
   app.use('/api/wishlist', wishlistRoutes);
