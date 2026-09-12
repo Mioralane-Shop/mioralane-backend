@@ -17,6 +17,7 @@ import {
   adminCouponRoutes,
   promotionPublicRoutes,
 } from './promotion/promotion.routes';
+import { adminShippingSettingsRoutes, shippingRoutes } from './shipping/shipping.routes';
 import { authLimiter } from './middleware/rateLimiter.middleware';
 import { swaggerSpec, swaggerServe, swaggerSetup } from './swagger';
 
@@ -117,7 +118,9 @@ const createApp = (): express.Application => {
   // Promotion campaign and coupon management
   app.use('/api/admin/campaigns', adminCampaignRoutes);
   app.use('/api/admin/coupons', adminCouponRoutes);
+  app.use('/api/admin/settings', adminShippingSettingsRoutes);
   app.use('/api/promotions', promotionPublicRoutes);
+  app.use('/api/shipping', shippingRoutes);
 
   // Wishlist routes (authenticated user flow)
   app.use('/api/wishlist', wishlistRoutes);

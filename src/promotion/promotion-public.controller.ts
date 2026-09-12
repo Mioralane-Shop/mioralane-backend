@@ -3,7 +3,6 @@ import { Request, Response } from 'express';
 import { Product } from '../product/product.model';
 import { Combo } from '../combo/combo.model';
 import { AuthenticatedRequest } from '../middleware/auth.middleware';
-import { DeliveryZone } from '../order/order.model';
 import { Coupon } from './coupon.model';
 import {
   calculateAutomaticPromotion,
@@ -12,14 +11,7 @@ import {
   selectBetterSinglePromotion,
   validateCouponForOrder,
 } from './promotion.service';
-
-const SHIPPING_FEES: Record<DeliveryZone, number> = {
-  inside_dhaka: 80,
-  outside_dhaka: 150,
-};
-
-const isValidZone = (zone: unknown): zone is DeliveryZone =>
-  zone === 'inside_dhaka' || zone === 'outside_dhaka';
+import { resolveShipping, validateAndNormalizeShippingAddress } from '../shipping/shipping.service';
 
 export const getActivePromotion = async (_req: Request, res: Response): Promise<void> => {
   const campaign = await findActiveCampaign();
@@ -103,11 +95,7 @@ const resolveItems = async (rawItems: any[]): Promise<DiscountableOrderItem[]> =
 export const validatePromotion = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
     const items = await resolveItems(Array.isArray(req.body?.items) ? req.body.items : []);
-    const deliveryZone = req.body?.deliveryZone;
-    if (!isValidZone(deliveryZone)) {
-      res.status(400).json({ success: false, message: 'Valid delivery zone is required' });
-      return;
-    }
+    const normalizedAddress = validateAndNormalizeShippingAddress(req.body?.shippingAddress ?? req.body?.address);
 
     const itemsTotal = items.reduce((sum, item) => sum + item.price * item.quantity, 0);
     const automatic = await calculateAutomaticPromotion(items, itemsTotal, req.user.id);
@@ -116,18 +104,35 @@ export const validatePromotion = async (req: AuthenticatedRequest, res: Response
       ? await validateCouponForOrder({ couponCode, userId: req.user.id, items, itemsTotal })
       : undefined;
 
-    const baseShippingFee = SHIPPING_FEES[deliveryZone];
-    const selectedDiscount = selectBetterSinglePromotion(automatic, coupon, baseShippingFee);
-    const shippingFee = selectedDiscount.freeDelivery ? 0 : baseShippingFee;
+    const baseShipping = await resolveShipping({
+      address: normalizedAddress,
+      itemsTotal,
+      discountAmount: 0,
+    });
+    const selectedDiscount = selectBetterSinglePromotion(automatic, coupon, baseShipping.baseCharge);
     const discountAmount = selectedDiscount.discountAmount;
+    const shipping = await resolveShipping({
+      address: normalizedAddress,
+      itemsTotal,
+      discountAmount,
+      promotionFreeDelivery: selectedDiscount.freeDelivery,
+    });
+
+    if (!shipping.availability.available) {
+      res.status(400).json({
+        success: false,
+        message: shipping.availability.message ?? 'Delivery is unavailable for the selected address',
+      });
+      return;
+    }
 
     res.json({
       success: true,
       totals: {
         subtotal: itemsTotal,
         discountAmount,
-        shippingFee,
-        totalAmount: Math.max(itemsTotal - discountAmount, 0) + shippingFee,
+        shippingFee: shipping.finalCharge,
+        totalAmount: Math.max(itemsTotal - discountAmount, 0) + shipping.finalCharge,
       },
       promotion: selectedDiscount.promotion,
       coupon: selectedDiscount.coupon,
