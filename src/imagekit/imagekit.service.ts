@@ -23,10 +23,12 @@ const DEFAULT_FILENAME_PREFIX = 'mioralane-test';
 const MEDIA_FOLDER_BY_TYPE: Record<MediaAssetType, string> = {
   product: '/mioralane/products',
   combo: '/mioralane/combos',
+  campaign: '/mioralane/campaigns',
 };
 const MEDIA_FILENAME_PREFIX_BY_TYPE: Record<MediaAssetType, string> = {
   product: 'mioralane-product',
   combo: 'mioralane-combo',
+  campaign: 'mioralane-campaign',
 };
 const MIME_TO_EXTENSION: Record<SupportedImageMimeType, string> = {
   'image/jpeg': '.jpg',

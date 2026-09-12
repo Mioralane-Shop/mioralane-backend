@@ -55,9 +55,21 @@ type RawOrderRecord = {
   shippingAddress?: {
     name?: string;
     phone?: string;
-    deliveryZone?: 'inside_dhaka' | 'outside_dhaka';
+    division?: string;
+    district?: string;
+    deliveryZone?: 'inside_dhaka' | 'dhaka_suburban' | 'outside_dhaka';
     area?: string;
     address?: string;
+    landmark?: string;
+  };
+  shipping?: {
+    zone?: 'inside_dhaka' | 'dhaka_suburban' | 'outside_dhaka';
+    baseCharge?: number;
+    finalCharge?: number;
+    isFreeDelivery?: boolean;
+    freeDeliveryReason?: 'threshold' | 'campaign';
+    estimatedMinDays?: number;
+    estimatedMaxDays?: number;
   };
   itemsTotal?: number;
   shippingFee?: number;
@@ -93,9 +105,21 @@ type AdminOrderDetail = AdminOrderSummary & {
   shippingAddress: {
     name: string;
     phone: string;
-    deliveryZone: 'inside_dhaka' | 'outside_dhaka';
+    division?: string;
+    district?: string;
+    deliveryZone: 'inside_dhaka' | 'dhaka_suburban' | 'outside_dhaka';
     area: string;
     address: string;
+    landmark?: string;
+  };
+  shipping?: {
+    zone: 'inside_dhaka' | 'dhaka_suburban' | 'outside_dhaka';
+    baseCharge: number;
+    finalCharge: number;
+    isFreeDelivery: boolean;
+    freeDeliveryReason?: 'threshold' | 'campaign';
+    estimatedMinDays: number;
+    estimatedMaxDays: number;
   };
   itemsTotal: number;
   shippingFee: number;
@@ -228,10 +252,24 @@ const formatOrder = (order: RawOrderRecord): AdminOrderSummary | AdminOrderDetai
     shippingAddress: {
       name: shippingName,
       phone: shippingPhone,
+      division: order.shippingAddress.division,
+      district: order.shippingAddress.district,
       deliveryZone: order.shippingAddress.deliveryZone ?? 'inside_dhaka',
       area: order.shippingAddress.area ?? '',
       address: order.shippingAddress.address ?? '',
+      landmark: order.shippingAddress.landmark,
     },
+    shipping: order.shipping?.zone
+      ? {
+          zone: order.shipping.zone,
+          baseCharge: order.shipping.baseCharge ?? order.shippingFee ?? 0,
+          finalCharge: order.shipping.finalCharge ?? order.shippingFee ?? 0,
+          isFreeDelivery: Boolean(order.shipping.isFreeDelivery),
+          freeDeliveryReason: order.shipping.freeDeliveryReason,
+          estimatedMinDays: order.shipping.estimatedMinDays ?? 0,
+          estimatedMaxDays: order.shipping.estimatedMaxDays ?? 0,
+        }
+      : undefined,
     itemsTotal: order.itemsTotal ?? 0,
     shippingFee: order.shippingFee ?? 0,
     updatedAt: order.updatedAt,

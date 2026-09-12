@@ -3,9 +3,22 @@ import mongoose from 'mongoose';
 import { Response } from 'express';
 import { Product } from '../product/product.model';
 import { Combo } from '../combo/combo.model';
-import { Order, DeliveryZone, OrderItemType, PaymentMethod } from './order.model';
+import { Order, OrderItemType, PaymentMethod } from './order.model';
 import { AuthenticatedRequest } from '../middleware/auth.middleware';
 import { OrderStatus } from '../enums/order-status.enum';
+import { CouponUsage } from '../promotion/coupon-usage.model';
+import {
+  calculateAutomaticPromotion,
+  DiscountableOrderItem,
+  reserveCouponUsage,
+  selectBetterSinglePromotion,
+  validateCouponForOrder,
+} from '../promotion/promotion.service';
+import {
+  createCheckoutQuoteFingerprint,
+  resolveShipping,
+  validateAndNormalizeShippingAddress,
+} from '../shipping/shipping.service';
 
 type OrderPayloadItem = {
   itemId?: string;
@@ -22,19 +35,19 @@ type CreateOrderBody = {
   shippingAddress?: {
     name?: string;
     phone?: string;
-    deliveryZone?: DeliveryZone;
+    division?: string;
+    district?: string;
     area?: string;
     address?: string;
+    detailedAddress?: string;
+    landmark?: string;
   };
   paymentMethod?: PaymentMethod;
+  couponCode?: string;
+  quoteFingerprint?: string;
 };
 
-type HttpError = Error & { statusCode?: number };
-
-const SHIPPING_FEES: Record<DeliveryZone, number> = {
-  inside_dhaka: 80,
-  outside_dhaka: 150,
-};
+type HttpError = Error & { statusCode?: number; code?: string; quote?: unknown };
 
 const generateOrderNumber = (): string => {
   const stamp = new Date().toISOString().slice(0, 10).replace(/-/g, '');
@@ -42,25 +55,11 @@ const generateOrderNumber = (): string => {
   return `MIOR-${stamp}-${token}`;
 };
 
-const normalizePhone = (value: string): string => value.trim().replace(/\s+/g, ' ');
-
-const isValidZone = (zone: unknown): zone is DeliveryZone =>
-  zone === 'inside_dhaka' || zone === 'outside_dhaka';
-
-const isValidPhone = (value: string): boolean => /^[0-9+\-\s()]+$/.test(value);
-
-const normalizeRequiredField = (value: unknown): string | null => {
-  if (typeof value !== 'string') {
-    return null;
-  }
-
-  const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed : null;
-};
-
-const createHttpError = (statusCode: number, message: string): HttpError => {
+const createHttpError = (statusCode: number, message: string, code?: string, quote?: unknown): HttpError => {
   const error = new Error(message) as HttpError;
   error.statusCode = statusCode;
+  error.code = code;
+  error.quote = quote;
   return error;
 };
 
@@ -76,7 +75,6 @@ export const createOrder = async (req: AuthenticatedRequest, res: Response): Pro
   const items = body?.items;
   const shippingAddress = body?.shippingAddress;
   const paymentMethod = body?.paymentMethod ?? 'cash_on_delivery';
-  const deliveryZone = shippingAddress?.deliveryZone;
 
   if (!Array.isArray(items) || items.length === 0) {
     res.status(400).json({ success: false, message: 'Order items are required' });
@@ -88,37 +86,14 @@ export const createOrder = async (req: AuthenticatedRequest, res: Response): Pro
     return;
   }
 
-  if (
-    !normalizeRequiredField(shippingAddress?.name) ||
-    !normalizeRequiredField(shippingAddress?.phone) ||
-    !normalizeRequiredField(shippingAddress?.area) ||
-    !normalizeRequiredField(shippingAddress?.address) ||
-    !isValidZone(deliveryZone)
-  ) {
+  let normalizedShippingAddress;
+  try {
+    normalizedShippingAddress = validateAndNormalizeShippingAddress(shippingAddress);
+  } catch (error) {
+    const err = error as HttpError;
     res.status(400).json({
       success: false,
-      message: 'Shipping name, phone, area, address, and delivery zone are required',
-    });
-    return;
-  }
-
-  const validatedShippingAddress = shippingAddress as {
-    name: string;
-    phone: string;
-    deliveryZone: DeliveryZone;
-    area: string;
-    address: string;
-  };
-
-  const normalizedName = validatedShippingAddress.name.trim();
-  const normalizedPhone = normalizePhone(validatedShippingAddress.phone);
-  const normalizedArea = validatedShippingAddress.area.trim();
-  const normalizedAddress = validatedShippingAddress.address.trim();
-
-  if (!isValidPhone(normalizedPhone)) {
-    res.status(400).json({
-      success: false,
-      message: 'Phone number contains invalid characters',
+      message: err.message,
     });
     return;
   }
@@ -152,6 +127,8 @@ export const createOrder = async (req: AuthenticatedRequest, res: Response): Pro
         price: number;
         thumbnail: string;
         quantity: number;
+        originalPrice?: number;
+        category?: string;
       }> = [];
 
       for (const item of normalizedItems) {
@@ -166,11 +143,11 @@ export const createOrder = async (req: AuthenticatedRequest, res: Response): Pro
           item.itemType === 'combo'
             ? await Combo.findById(item.itemId)
                 .session(session)
-                .select('_id title price images stock')
+                .select('_id title price images stock category')
                 .exec()
             : await Product.findById(item.itemId)
                 .session(session)
-                .select('_id title price salePrice images stock')
+                .select('_id title price salePrice images stock category')
                 .exec();
 
         if (!sourceDoc) {
@@ -187,20 +164,107 @@ export const createOrder = async (req: AuthenticatedRequest, res: Response): Pro
           );
         }
 
+        const productDoc = sourceDoc as { salePrice?: number; price: number; category?: string };
+        const sellingPrice =
+          item.itemType === 'product' && productDoc.salePrice != null
+            ? productDoc.salePrice
+            : productDoc.price;
+
         resolvedItems.push({
           itemType: item.itemType,
           itemId: item.itemId as string,
           sourceId: sourceDoc._id,
           title: sourceDoc.title ?? (item.itemId as string),
-          price: (() => {
-            const productDoc = sourceDoc as { salePrice?: number; price: number };
-            return item.itemType === 'product' && productDoc.salePrice != null
-              ? productDoc.salePrice
-              : productDoc.price;
-          })(),
+          price: sellingPrice,
           thumbnail: sourceDoc.images?.[0] ?? '',
           quantity: item.quantity,
+          originalPrice: productDoc.price,
+          category: productDoc.category,
         });
+      }
+
+      const itemsTotal = resolvedItems.reduce((sum, item) => sum + item.price * item.quantity, 0);
+      const discountItems: DiscountableOrderItem[] = resolvedItems.map((item) => ({
+        itemType: item.itemType,
+        sourceId: item.sourceId,
+        title: item.title,
+        quantity: item.quantity,
+        price: item.price,
+        originalPrice: item.originalPrice,
+        category: item.category,
+      }));
+
+      const automaticPromotion = await calculateAutomaticPromotion(discountItems, itemsTotal, userId, session);
+      const couponCode = typeof body?.couponCode === 'string' ? body.couponCode.trim() : '';
+      const couponPromotion = couponCode
+        ? await validateCouponForOrder({
+            couponCode,
+            userId,
+            items: discountItems,
+            itemsTotal,
+            session,
+          })
+        : undefined;
+      const baseShipping = await resolveShipping({
+        address: normalizedShippingAddress,
+        itemsTotal,
+        discountAmount: 0,
+        session,
+      });
+      const selectedPromotion = selectBetterSinglePromotion(
+        automaticPromotion,
+        couponPromotion,
+        baseShipping.baseCharge
+      );
+      const discountAmount = Math.min(selectedPromotion.discountAmount, itemsTotal);
+      const shipping = await resolveShipping({
+        address: normalizedShippingAddress,
+        itemsTotal,
+        discountAmount,
+        promotionFreeDelivery: selectedPromotion.freeDelivery,
+        session,
+      });
+      if (!shipping.availability.available) {
+        throw createHttpError(400, shipping.availability.message ?? 'Delivery is unavailable for the selected address');
+      }
+
+      const shippingFee = shipping.finalCharge;
+      const totalAmount = Math.max(itemsTotal - discountAmount, 0) + shippingFee;
+      const totals = {
+        subtotal: itemsTotal,
+        discountAmount,
+        shippingFee,
+        totalAmount,
+      };
+      const quoteFingerprint = createCheckoutQuoteFingerprint({
+        shipping,
+        totals,
+        promotion: selectedPromotion.promotion,
+        coupon: selectedPromotion.coupon,
+      });
+
+      if (body?.quoteFingerprint !== quoteFingerprint) {
+        throw createHttpError(
+          409,
+          'Delivery or order total has been updated. Please review the new total and place your order again.',
+          'CHECKOUT_QUOTE_CHANGED',
+          {
+            quoteFingerprint,
+            shipping: {
+              zone: shipping.zone,
+              baseShippingCharge: shipping.baseCharge,
+              finalShippingCharge: shipping.finalCharge,
+              isFreeDelivery: shipping.isFreeDelivery,
+              freeDeliveryReason: shipping.freeDeliveryReason,
+              estimatedMinDays: shipping.estimatedMinDays,
+              estimatedMaxDays: shipping.estimatedMaxDays,
+              availability: shipping.availability,
+            },
+            totals,
+            promotion: selectedPromotion.promotion,
+            coupon: selectedPromotion.coupon,
+          }
+        );
       }
 
       for (const item of resolvedItems) {
@@ -222,10 +286,6 @@ export const createOrder = async (req: AuthenticatedRequest, res: Response): Pro
         }
       }
 
-      const itemsTotal = resolvedItems.reduce((sum, item) => sum + item.price * item.quantity, 0);
-      const shippingFee = SHIPPING_FEES[validatedShippingAddress.deliveryZone];
-      const totalAmount = itemsTotal + shippingFee;
-
       const [order] = await Order.create(
         [
           {
@@ -242,15 +302,30 @@ export const createOrder = async (req: AuthenticatedRequest, res: Response): Pro
               thumbnail: item.thumbnail,
             })),
             shippingAddress: {
-              name: normalizedName,
-              phone: normalizedPhone,
-              deliveryZone: validatedShippingAddress.deliveryZone,
-              area: normalizedArea,
-              address: normalizedAddress,
+              name: normalizedShippingAddress.name,
+              phone: normalizedShippingAddress.phone,
+              division: normalizedShippingAddress.division,
+              district: normalizedShippingAddress.district,
+              deliveryZone: shipping.zone,
+              area: normalizedShippingAddress.area,
+              address: normalizedShippingAddress.address,
+              landmark: normalizedShippingAddress.landmark,
             },
             itemsTotal,
+            discountAmount,
             shippingFee,
+            shipping: {
+              zone: shipping.zone,
+              baseCharge: shipping.baseCharge,
+              finalCharge: shipping.finalCharge,
+              isFreeDelivery: shipping.isFreeDelivery,
+              freeDeliveryReason: shipping.freeDeliveryReason,
+              estimatedMinDays: shipping.estimatedMinDays,
+              estimatedMaxDays: shipping.estimatedMaxDays,
+            },
             totalAmount,
+            promotion: selectedPromotion.promotion,
+            coupon: selectedPromotion.coupon,
             paymentMethod,
             paymentStatus: 'pending',
             orderStatus: OrderStatus.PENDING,
@@ -258,6 +333,22 @@ export const createOrder = async (req: AuthenticatedRequest, res: Response): Pro
         ],
         { session }
       );
+
+      if (selectedPromotion.coupon) {
+        await reserveCouponUsage({ _id: selectedPromotion.coupon.couponId }, session);
+        await CouponUsage.create(
+          [
+            {
+              couponId: selectedPromotion.coupon.couponId,
+              userId: new mongoose.Types.ObjectId(userId),
+              orderId: order._id,
+              discountAmount: selectedPromotion.coupon.discountAmount,
+              usedAt: new Date(),
+            },
+          ],
+          { session }
+        );
+      }
 
       return order;
     });
@@ -289,6 +380,8 @@ export const createOrder = async (req: AuthenticatedRequest, res: Response): Pro
       res.status(httpError.statusCode).json({
         success: false,
         message: httpError.message,
+        code: httpError.code,
+        quote: httpError.quote,
       });
       return;
     }
