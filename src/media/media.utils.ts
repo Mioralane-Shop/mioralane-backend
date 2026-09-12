@@ -4,6 +4,7 @@ import { extractMediaUrls, normalizeMediaAssets } from './media.schema';
 export const MEDIA_FOLDER_BY_TYPE: Record<MediaAssetType, string> = {
   product: '/mioralane/products',
   combo: '/mioralane/combos',
+  campaign: '/mioralane/campaigns',
 };
 
 export { extractMediaUrls, normalizeMediaAssets };

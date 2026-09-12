@@ -16,6 +16,12 @@ export interface IProduct {
   brand: string;
   category: string;
   description: string;
+  ingredients?: string;
+  howToUse?: string;
+  keyIngredients?: Array<{
+    name: string;
+    benefit?: string;
+  }>;
   skinType: string[];
   skinConcern: string[];
   price: number;
@@ -76,6 +82,35 @@ const ProductSchema = new Schema<IProductDocument>(
       type: String,
       default: '',
       maxlength: [2000, 'Description cannot exceed 2000 characters'],
+    },
+
+    ingredients: {
+      type: String,
+      trim: true,
+      default: undefined,
+    },
+
+    howToUse: {
+      type: String,
+      trim: true,
+      default: undefined,
+    },
+
+    keyIngredients: {
+      type: [
+        {
+          name: {
+            type: String,
+            required: [true, 'Key ingredient name is required'],
+            trim: true,
+          },
+          benefit: {
+            type: String,
+            trim: true,
+          },
+        },
+      ],
+      default: [],
     },
 
     skinType: {

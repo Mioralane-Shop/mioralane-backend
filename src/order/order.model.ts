@@ -3,7 +3,7 @@ import { OrderStatus } from '../enums/order-status.enum';
 
 export type PaymentMethod = 'cash_on_delivery';
 export type PaymentStatus = 'pending' | 'paid' | 'failed';
-export type DeliveryZone = 'inside_dhaka' | 'outside_dhaka';
+export type DeliveryZone = 'inside_dhaka' | 'dhaka_suburban' | 'outside_dhaka';
 export type OrderItemType = 'product' | 'combo';
 
 export interface IOrderItem {
@@ -20,9 +20,22 @@ export interface IOrderItem {
 export interface IShippingAddress {
   name: string;
   phone: string;
+  division?: string;
+  district?: string;
   deliveryZone: DeliveryZone;
   area: string;
   address: string;
+  landmark?: string;
+}
+
+export interface IOrderShippingSnapshot {
+  zone: DeliveryZone;
+  baseCharge: number;
+  finalCharge: number;
+  isFreeDelivery: boolean;
+  freeDeliveryReason?: 'threshold' | 'campaign';
+  estimatedMinDays: number;
+  estimatedMaxDays: number;
 }
 
 export interface IOrder {
@@ -31,8 +44,22 @@ export interface IOrder {
   items: IOrderItem[];
   shippingAddress: IShippingAddress;
   itemsTotal: number;
+  discountAmount: number;
   shippingFee: number;
+  shipping?: IOrderShippingSnapshot;
   totalAmount: number;
+  promotion?: {
+    campaignId?: mongoose.Types.ObjectId;
+    campaignName?: string;
+    campaignType?: string;
+  };
+  coupon?: {
+    couponId?: mongoose.Types.ObjectId;
+    code?: string;
+    discountType?: string;
+    discountValue?: number;
+    discountAmount?: number;
+  };
   paymentMethod: PaymentMethod;
   paymentStatus: PaymentStatus;
   orderStatus: OrderStatus;
@@ -101,9 +128,19 @@ const ShippingAddressSchema = new Schema<IShippingAddress>(
       required: true,
       trim: true,
     },
+    division: {
+      type: String,
+      trim: true,
+      default: undefined,
+    },
+    district: {
+      type: String,
+      trim: true,
+      default: undefined,
+    },
     deliveryZone: {
       type: String,
-      enum: ['inside_dhaka', 'outside_dhaka'],
+      enum: ['inside_dhaka', 'dhaka_suburban', 'outside_dhaka'],
       required: true,
     },
     area: {
@@ -115,6 +152,52 @@ const ShippingAddressSchema = new Schema<IShippingAddress>(
       type: String,
       required: true,
       trim: true,
+    },
+    landmark: {
+      type: String,
+      trim: true,
+      default: undefined,
+    },
+  },
+  { _id: false }
+);
+
+const OrderShippingSnapshotSchema = new Schema<IOrderShippingSnapshot>(
+  {
+    zone: {
+      type: String,
+      enum: ['inside_dhaka', 'dhaka_suburban', 'outside_dhaka'],
+      required: true,
+    },
+    baseCharge: {
+      type: Number,
+      required: true,
+      min: 0,
+    },
+    finalCharge: {
+      type: Number,
+      required: true,
+      min: 0,
+    },
+    isFreeDelivery: {
+      type: Boolean,
+      required: true,
+      default: false,
+    },
+    freeDeliveryReason: {
+      type: String,
+      enum: ['threshold', 'campaign'],
+      default: undefined,
+    },
+    estimatedMinDays: {
+      type: Number,
+      required: true,
+      min: 0,
+    },
+    estimatedMaxDays: {
+      type: Number,
+      required: true,
+      min: 0,
     },
   },
   { _id: false }
@@ -152,10 +235,19 @@ const OrderSchema = new Schema<IOrderDocument>(
       required: true,
       min: 0,
     },
+    discountAmount: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
     shippingFee: {
       type: Number,
       required: true,
       min: 0,
+    },
+    shipping: {
+      type: OrderShippingSnapshotSchema,
+      default: undefined,
     },
     totalAmount: {
       type: Number,
@@ -166,6 +258,50 @@ const OrderSchema = new Schema<IOrderDocument>(
       type: String,
       enum: ['cash_on_delivery'],
       default: 'cash_on_delivery',
+    },
+    promotion: {
+      campaignId: {
+        type: Schema.Types.ObjectId,
+        ref: 'PromotionCampaign',
+        default: undefined,
+      },
+      campaignName: {
+        type: String,
+        trim: true,
+        default: undefined,
+      },
+      campaignType: {
+        type: String,
+        trim: true,
+        default: undefined,
+      },
+    },
+    coupon: {
+      couponId: {
+        type: Schema.Types.ObjectId,
+        ref: 'Coupon',
+        default: undefined,
+      },
+      code: {
+        type: String,
+        trim: true,
+        default: undefined,
+      },
+      discountType: {
+        type: String,
+        trim: true,
+        default: undefined,
+      },
+      discountValue: {
+        type: Number,
+        min: 0,
+        default: undefined,
+      },
+      discountAmount: {
+        type: Number,
+        min: 0,
+        default: undefined,
+      },
     },
     paymentStatus: {
       type: String,
