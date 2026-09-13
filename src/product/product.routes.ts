@@ -5,6 +5,7 @@ import {
   deleteProduct,
   getProducts,
   getProductByIdOrSlug,
+  markPreOrderArrived,
   updateProduct,
 } from './product.controller';
 
@@ -27,6 +28,13 @@ router.put(
   protect as RequestHandler,
   adminOnly as RequestHandler,
   updateProduct as RequestHandler
+);
+
+router.patch(
+  '/:id/pre-order/arrive',
+  protect as RequestHandler,
+  adminOnly as RequestHandler,
+  markPreOrderArrived as RequestHandler
 );
 
 router.delete(

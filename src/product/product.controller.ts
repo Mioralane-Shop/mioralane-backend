@@ -5,6 +5,7 @@ import { slugify } from '../utils/slugify';
 import mongoose from 'mongoose';
 import { extractMediaUrls, normalizeMediaAssets } from '../media/media.utils';
 import type { MediaAsset } from '../media/media.types';
+import { normalizeOptionalLowStockThreshold } from '../inventory/inventory.service';
 
 // ─── Types ────────────────────────────────────────────────────────────────
 
@@ -48,6 +49,9 @@ type ProductMutationBody = Partial<
     | 'hoverImage'
     | 'volume'
     | 'stock'
+    | 'lowStockThreshold'
+    | 'availabilityMode'
+    | 'preOrder'
     | 'isBestSeller'
     | 'isNewArrival'
     | 'isTrending'
@@ -73,6 +77,9 @@ const mutationFields: (keyof ProductMutationBody)[] = [
   'hoverImage',
   'volume',
   'stock',
+  'lowStockThreshold',
+  'availabilityMode',
+  'preOrder',
   'isBestSeller',
   'isNewArrival',
   'isTrending',
@@ -172,6 +179,77 @@ const normalizeProductMedia = (body: ProductMutationBody): void => {
   }
 };
 
+const normalizeInventoryFields = (body: ProductMutationBody): void => {
+  const normalizedThreshold = normalizeOptionalLowStockThreshold(
+    (body as Record<string, unknown>).lowStockThreshold
+  );
+
+  if (normalizedThreshold !== undefined) {
+    body.lowStockThreshold = normalizedThreshold;
+  }
+};
+
+const normalizePreOrderFields = (body: ProductMutationBody): void => {
+  const rawBody = body as Record<string, unknown>;
+  const availabilityMode = rawBody.availabilityMode;
+
+  if (availabilityMode !== undefined && availabilityMode !== 'in_stock' && availabilityMode !== 'pre_order') {
+    throw Object.assign(new Error('availabilityMode must be in_stock or pre_order'), {
+      statusCode: 400,
+      code: 'invalid_availability_mode',
+    });
+  }
+
+  if (availabilityMode === 'in_stock') {
+    body.availabilityMode = 'in_stock';
+    body.preOrder = undefined;
+    return;
+  }
+
+  if (availabilityMode !== 'pre_order' && rawBody.preOrder === undefined) {
+    return;
+  }
+
+  const preOrder = (rawBody.preOrder ?? {}) as Record<string, unknown>;
+  const expectedArrivalDate =
+    typeof preOrder.expectedArrivalDate === 'string' || preOrder.expectedArrivalDate instanceof Date
+      ? new Date(preOrder.expectedArrivalDate)
+      : null;
+  const quantityLimit = Number(preOrder.quantityLimit);
+  const status = preOrder.status ?? 'accepting';
+  const customerMessage = normalizeOptionalString(preOrder.customerMessage);
+
+  if (!expectedArrivalDate || Number.isNaN(expectedArrivalDate.getTime())) {
+    throw Object.assign(new Error('Expected arrival date is required for pre-order products'), {
+      statusCode: 400,
+      code: 'invalid_pre_order_expected_arrival',
+    });
+  }
+
+  if (!Number.isInteger(quantityLimit) || quantityLimit < 0) {
+    throw Object.assign(new Error('Pre-order quantity limit must be a non-negative whole number'), {
+      statusCode: 400,
+      code: 'invalid_pre_order_quantity_limit',
+    });
+  }
+
+  if (status !== 'accepting' && status !== 'closed' && status !== 'arrived') {
+    throw Object.assign(new Error('Pre-order status must be accepting, closed, or arrived'), {
+      statusCode: 400,
+      code: 'invalid_pre_order_status',
+    });
+  }
+
+  body.availabilityMode = 'pre_order';
+  body.preOrder = {
+    expectedArrivalDate,
+    quantityLimit,
+    customerMessage,
+    status,
+    reservedQuantity: typeof preOrder.reservedQuantity === 'number' ? preOrder.reservedQuantity : undefined,
+  };
+};
+
 const normalizeSkincareFields = (body: ProductMutationBody): void => {
   body.ingredients = normalizeOptionalString(body.ingredients);
   body.howToUse = normalizeOptionalString(body.howToUse);
@@ -264,6 +342,22 @@ const formatProduct = (product: ProductAggregateRow): ProductAggregateRow => {
   }
 
   delete formatted.salePrice;
+
+  formatted.availabilityMode = formatted.availabilityMode ?? 'in_stock';
+  if (formatted.preOrder && (formatted.availabilityMode === 'pre_order' || formatted.preOrder.status === 'arrived')) {
+    const quantityLimit = Number(formatted.preOrder.quantityLimit ?? 0);
+    const reservedQuantity = Number(formatted.preOrder.reservedQuantity ?? 0);
+    formatted.preOrder = {
+      expectedArrivalDate: formatted.preOrder.expectedArrivalDate,
+      quantityLimit,
+      customerMessage: formatted.preOrder.customerMessage,
+      status: formatted.preOrder.status ?? 'accepting',
+      reservedQuantity,
+      remainingQuantity: Math.max(quantityLimit - reservedQuantity, 0),
+    };
+  } else {
+    formatted.preOrder = undefined;
+  }
 
   return formatted;
 };
@@ -375,6 +469,8 @@ export const createProduct = async (req: Request, res: Response): Promise<void> 
     const body = sanitizeMutationBody((req.body ?? {}) as Record<string, unknown>);
     normalizeProductMedia(body);
     normalizeSkincareFields(body);
+    normalizeInventoryFields(body);
+    normalizePreOrderFields(body);
 
     // Validate required fields
   if (!body.title || !body.brand || !body.category || body.price === undefined || body.price === null) {
@@ -413,6 +509,15 @@ export const createProduct = async (req: Request, res: Response): Promise<void> 
       product,
     });
   } catch (error: any) {
+    if (error?.statusCode) {
+      res.status(error.statusCode).json({
+        success: false,
+        message: error.message,
+        code: error.code,
+      });
+      return;
+    }
+
     if (error instanceof Error && error.message === 'Key ingredients must be an array.') {
       res.status(400).json({
         success: false,
@@ -493,6 +598,8 @@ export const updateProduct = async (req: Request, res: Response): Promise<void> 
     const body = sanitizeMutationBody((req.body ?? {}) as Record<string, unknown>);
     normalizeProductMedia(body);
     normalizeSkincareFields(body);
+    normalizeInventoryFields(body);
+    normalizePreOrderFields(body);
 
     if (
       (body.title !== undefined && body.title.trim() === '') ||
@@ -516,6 +623,10 @@ export const updateProduct = async (req: Request, res: Response): Promise<void> 
       return;
     }
 
+    if (body.availabilityMode === 'pre_order' && body.preOrder) {
+      body.preOrder.reservedQuantity = product.preOrder?.reservedQuantity ?? 0;
+    }
+
     product.set({
       ...body,
       slug: nextSlug,
@@ -528,6 +639,15 @@ export const updateProduct = async (req: Request, res: Response): Promise<void> 
       product,
     });
   } catch (error: any) {
+    if (error?.statusCode) {
+      res.status(error.statusCode).json({
+        success: false,
+        message: error.message,
+        code: error.code,
+      });
+      return;
+    }
+
     if (error instanceof Error && error.message === 'Key ingredients must be an array.') {
       res.status(400).json({
         success: false,
@@ -613,6 +733,82 @@ export const deleteProduct = async (req: Request, res: Response): Promise<void> 
       success: false,
       message: 'Internal server error',
     });
+  }
+};
+
+export const markPreOrderArrived = async (req: Request, res: Response): Promise<void> => {
+  const session = await mongoose.startSession();
+
+  try {
+    const { id } = req.params as { id: string };
+    const actualReceivedQuantity = Number(req.body?.actualReceivedQuantity);
+
+    if (!isValidObjectId(id)) {
+      res.status(400).json({ success: false, message: 'Invalid product ID' });
+      return;
+    }
+
+    if (!Number.isInteger(actualReceivedQuantity) || actualReceivedQuantity < 0) {
+      res.status(400).json({
+        success: false,
+        message: 'Actual quantity received must be a non-negative whole number',
+        code: 'invalid_received_quantity',
+      });
+      return;
+    }
+
+    const product = await session.withTransaction(async () => {
+      const current = await Product.findById(id).session(session).exec();
+
+      if (!current) {
+        throw Object.assign(new Error('Product not found'), { statusCode: 404 });
+      }
+
+      if ((current.availabilityMode ?? 'in_stock') !== 'pre_order') {
+        throw Object.assign(new Error('Product is not configured for pre-order'), {
+          statusCode: 400,
+          code: 'not_pre_order',
+        });
+      }
+
+      const reservedQuantity = current.preOrder?.reservedQuantity ?? 0;
+      if (actualReceivedQuantity < reservedQuantity) {
+        throw Object.assign(
+          new Error('Received quantity is lower than the quantity reserved by active pre-orders.'),
+          { statusCode: 409, code: 'pre_order_arrival_shortage' }
+        );
+      }
+
+      current.stock = actualReceivedQuantity - reservedQuantity;
+      current.availabilityMode = 'in_stock';
+      current.preOrder = {
+        ...(current.preOrder ?? {}),
+        status: 'arrived',
+        reservedQuantity,
+      };
+
+      await current.save({ session });
+      return current;
+    });
+
+    res.status(200).json({
+      success: true,
+      product,
+    });
+  } catch (error: any) {
+    if (error?.statusCode) {
+      res.status(error.statusCode).json({
+        success: false,
+        message: error.message,
+        code: error.code,
+      });
+      return;
+    }
+
+    console.error('[markPreOrderArrived]', error);
+    res.status(500).json({ success: false, message: 'Internal server error' });
+  } finally {
+    await session.endSession();
   }
 };
 

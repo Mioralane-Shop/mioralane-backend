@@ -5,6 +5,7 @@ export type PaymentMethod = 'cash_on_delivery';
 export type PaymentStatus = 'pending' | 'paid' | 'failed';
 export type DeliveryZone = 'inside_dhaka' | 'dhaka_suburban' | 'outside_dhaka';
 export type OrderItemType = 'product' | 'combo';
+export type FulfillmentType = 'regular' | 'pre_order';
 
 export interface IOrderItem {
   itemType: OrderItemType;
@@ -15,6 +16,12 @@ export interface IOrderItem {
   quantity: number;
   price: number;
   thumbnail: string;
+  fulfillmentType?: FulfillmentType;
+  preOrderSnapshot?: {
+    expectedArrivalDate?: Date;
+    customerMessage?: string;
+    quantityLimit?: number;
+  };
 }
 
 export interface IShippingAddress {
@@ -63,6 +70,9 @@ export interface IOrder {
   paymentMethod: PaymentMethod;
   paymentStatus: PaymentStatus;
   orderStatus: OrderStatus;
+  containsPreOrder?: boolean;
+  expectedReadinessDate?: Date;
+  preOrderReservationsReleased?: boolean;
 }
 
 export interface IOrderDocument extends IOrder, Document {
@@ -111,6 +121,27 @@ const OrderItemSchema = new Schema<IOrderItem>(
       type: String,
       required: true,
       trim: true,
+    },
+    fulfillmentType: {
+      type: String,
+      enum: ['regular', 'pre_order'],
+      default: 'regular',
+    },
+    preOrderSnapshot: {
+      expectedArrivalDate: {
+        type: Date,
+        default: undefined,
+      },
+      customerMessage: {
+        type: String,
+        trim: true,
+        default: undefined,
+      },
+      quantityLimit: {
+        type: Number,
+        min: 0,
+        default: undefined,
+      },
     },
   },
   { _id: false }
@@ -313,6 +344,19 @@ const OrderSchema = new Schema<IOrderDocument>(
       enum: Object.values(OrderStatus),
       default: OrderStatus.PENDING,
       index: true,
+    },
+    containsPreOrder: {
+      type: Boolean,
+      default: false,
+      index: true,
+    },
+    expectedReadinessDate: {
+      type: Date,
+      default: undefined,
+    },
+    preOrderReservationsReleased: {
+      type: Boolean,
+      default: false,
     },
   },
   {
