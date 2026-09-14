@@ -129,6 +129,12 @@ export const createOrder = async (req: AuthenticatedRequest, res: Response): Pro
         quantity: number;
         originalPrice?: number;
         category?: string;
+        fulfillmentType: 'regular' | 'pre_order';
+        preOrderSnapshot?: {
+          expectedArrivalDate?: Date;
+          customerMessage?: string;
+          quantityLimit?: number;
+        };
       }> = [];
 
       for (const item of normalizedItems) {
@@ -147,7 +153,7 @@ export const createOrder = async (req: AuthenticatedRequest, res: Response): Pro
                 .exec()
             : await Product.findById(item.itemId)
                 .session(session)
-                .select('_id title price salePrice images stock category')
+                .select('_id title price salePrice images stock category availabilityMode preOrder')
                 .exec();
 
         if (!sourceDoc) {
@@ -157,7 +163,30 @@ export const createOrder = async (req: AuthenticatedRequest, res: Response): Pro
           );
         }
 
-        if (sourceDoc.stock < item.quantity) {
+        const isPreOrderProduct =
+          item.itemType === 'product' && (sourceDoc as any).availabilityMode === 'pre_order';
+        const preOrder = isPreOrderProduct ? (sourceDoc as any).preOrder : undefined;
+        const preOrderLimit = Number(preOrder?.quantityLimit ?? 0);
+        const preOrderReserved = Number(preOrder?.reservedQuantity ?? 0);
+        const preOrderRemaining = Math.max(preOrderLimit - preOrderReserved, 0);
+
+        if (isPreOrderProduct) {
+          if (preOrder?.status !== 'accepting') {
+            throw createHttpError(
+              409,
+              `Pre-order is not currently accepting orders for ${sourceDoc.title ?? item.itemId}`,
+              'PRE_ORDER_CLOSED'
+            );
+          }
+
+          if (!preOrder?.expectedArrivalDate || preOrderLimit <= 0 || preOrderRemaining < item.quantity) {
+            throw createHttpError(
+              409,
+              `Pre-order capacity is full for ${sourceDoc.title ?? item.itemId}`,
+              'PRE_ORDER_FULL'
+            );
+          }
+        } else if (sourceDoc.stock < item.quantity) {
           throw createHttpError(
             409,
             `Insufficient stock for ${sourceDoc.title ?? item.itemId}`
@@ -180,6 +209,14 @@ export const createOrder = async (req: AuthenticatedRequest, res: Response): Pro
           quantity: item.quantity,
           originalPrice: productDoc.price,
           category: productDoc.category,
+          fulfillmentType: isPreOrderProduct ? 'pre_order' : 'regular',
+          preOrderSnapshot: isPreOrderProduct
+            ? {
+                expectedArrivalDate: preOrder.expectedArrivalDate,
+                customerMessage: preOrder.customerMessage,
+                quantityLimit: preOrderLimit,
+              }
+            : undefined,
         });
       }
 
@@ -268,6 +305,30 @@ export const createOrder = async (req: AuthenticatedRequest, res: Response): Pro
       }
 
       for (const item of resolvedItems) {
+        if (item.fulfillmentType === 'pre_order') {
+          const updated = await Product.findOneAndUpdate(
+            {
+              _id: item.sourceId,
+              availabilityMode: 'pre_order',
+              'preOrder.status': 'accepting',
+              $expr: {
+                $gte: [
+                  { $subtract: ['$preOrder.quantityLimit', { $ifNull: ['$preOrder.reservedQuantity', 0] }] },
+                  item.quantity,
+                ],
+              },
+            },
+            { $inc: { 'preOrder.reservedQuantity': item.quantity } },
+            { new: true, session }
+          ).exec();
+
+          if (!updated) {
+            throw createHttpError(409, 'One or more pre-order items are no longer available', 'PRE_ORDER_FULL');
+          }
+
+          continue;
+        }
+
         const updated =
           item.itemType === 'combo'
             ? await Combo.findOneAndUpdate(
@@ -286,6 +347,12 @@ export const createOrder = async (req: AuthenticatedRequest, res: Response): Pro
         }
       }
 
+      const preOrderDates = resolvedItems
+        .filter((item) => item.fulfillmentType === 'pre_order' && item.preOrderSnapshot?.expectedArrivalDate)
+        .map((item) => new Date(item.preOrderSnapshot!.expectedArrivalDate!).getTime());
+      const containsPreOrder = preOrderDates.length > 0;
+      const expectedReadinessDate = containsPreOrder ? new Date(Math.max(...preOrderDates)) : undefined;
+
       const [order] = await Order.create(
         [
           {
@@ -300,6 +367,8 @@ export const createOrder = async (req: AuthenticatedRequest, res: Response): Pro
               quantity: item.quantity,
               price: item.price,
               thumbnail: item.thumbnail,
+              fulfillmentType: item.fulfillmentType,
+              preOrderSnapshot: item.preOrderSnapshot,
             })),
             shippingAddress: {
               name: normalizedShippingAddress.name,
@@ -329,6 +398,9 @@ export const createOrder = async (req: AuthenticatedRequest, res: Response): Pro
             paymentMethod,
             paymentStatus: 'pending',
             orderStatus: OrderStatus.PENDING,
+            containsPreOrder,
+            expectedReadinessDate,
+            preOrderReservationsReleased: false,
           },
         ],
         { session }
