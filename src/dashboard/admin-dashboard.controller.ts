@@ -6,8 +6,14 @@ import { Combo } from '../combo/combo.model';
 import { Order } from '../order/order.model';
 import { Product } from '../product/product.model';
 import { UserModel } from '../auth/user.model';
+import {
+  getInventorySettings,
+  getStockStatus,
+  comboLowStockFilter,
+  productEffectiveThresholdExpression,
+  productLowStockFilter,
+} from '../inventory/inventory.service';
 
-const LOW_STOCK_THRESHOLD = 5;
 const RECENT_ORDERS_LIMIT = 5;
 const INVENTORY_ATTENTION_LIMIT = 10;
 
@@ -32,6 +38,8 @@ type DashboardInventoryAttentionItem = {
   itemType: 'product' | 'combo';
   title: string;
   stock: number;
+  effectiveLowStockThreshold: number;
+  stockStatus: 'low_stock' | 'out_of_stock';
   context: string;
 };
 
@@ -39,6 +47,8 @@ type DashboardSummaryResponse = {
   totalOrders: number;
   totalProducts: number;
   lowStockCount: number;
+  outOfStockCount: number;
+  restockNeededCount: number;
   completedRevenue: number;
   orderStatusCounts: Record<OrderStatus, number>;
   recentOrders: DashboardRecentOrder[];
@@ -66,6 +76,7 @@ type ProductAttentionRow = {
   _id?: mongoose.Types.ObjectId;
   title?: string;
   stock?: number;
+  effectiveLowStockThreshold?: number;
   brand?: string;
 };
 
@@ -73,6 +84,7 @@ type ComboAttentionRow = {
   _id?: mongoose.Types.ObjectId;
   title?: string;
   stock?: number;
+  effectiveLowStockThreshold?: number;
   routineTag?: string;
   brand?: string;
 };
@@ -95,13 +107,20 @@ export const getAdminDashboardSummary = async (
   res: Response
 ): Promise<void> => {
   try {
-    const lowStockMatch = { stock: { $lte: LOW_STOCK_THRESHOLD } };
+    const inventorySettings = await getInventorySettings();
+    const defaultLowStockThreshold = inventorySettings.defaultLowStockThreshold;
+    const productLowStockMatch = productLowStockFilter(defaultLowStockThreshold);
+    const comboLowStockMatch = comboLowStockFilter(defaultLowStockThreshold);
+    const outOfStockMatch = { stock: { $lte: 0 } };
+    const productOutOfStockMatch: Record<string, unknown> = { stock: { $lte: 0 }, availabilityMode: { $ne: 'pre_order' } };
 
     const [
       totalOrders,
       totalProducts,
       lowStockProducts,
       lowStockCombos,
+      outOfStockProducts,
+      outOfStockCombos,
       completedRevenueResult,
       orderStatusRows,
       recentOrderRows,
@@ -110,8 +129,10 @@ export const getAdminDashboardSummary = async (
     ] = await Promise.all([
       Order.countDocuments({}),
       Product.countDocuments({}),
-      Product.countDocuments(lowStockMatch),
-      Combo.countDocuments(lowStockMatch),
+      Product.countDocuments(productLowStockMatch),
+      Combo.countDocuments(comboLowStockMatch),
+      Product.countDocuments(productOutOfStockMatch),
+      Combo.countDocuments(outOfStockMatch),
       Order.aggregate<{ completedRevenue?: number }>([
         {
           $match: {
@@ -168,25 +189,52 @@ export const getAdminDashboardSummary = async (
         },
       ]),
       Product.aggregate<ProductAttentionRow>([
-        { $match: lowStockMatch },
+        {
+          $addFields: {
+            effectiveLowStockThreshold: productEffectiveThresholdExpression(defaultLowStockThreshold),
+          },
+        },
+        {
+          $match: {
+            availabilityMode: { $ne: 'pre_order' },
+            $expr: {
+              $or: [
+                { $lte: ['$stock', 0] },
+                {
+                  $and: [
+                    { $gt: ['$stock', 0] },
+                    { $lte: ['$stock', '$effectiveLowStockThreshold'] },
+                  ],
+                },
+              ],
+            },
+          },
+        },
         { $sort: { stock: 1, updatedAt: -1, createdAt: -1 } },
         { $limit: INVENTORY_ATTENTION_LIMIT },
         {
           $project: {
             title: 1,
             stock: 1,
+            effectiveLowStockThreshold: 1,
             brand: 1,
           },
         },
       ]),
       Combo.aggregate<ComboAttentionRow>([
-        { $match: lowStockMatch },
+        { $match: { $or: [outOfStockMatch, comboLowStockMatch] } },
+        {
+          $addFields: {
+            effectiveLowStockThreshold: defaultLowStockThreshold,
+          },
+        },
         { $sort: { stock: 1, updatedAt: -1, createdAt: -1 } },
         { $limit: INVENTORY_ATTENTION_LIMIT },
         {
           $project: {
             title: 1,
             stock: 1,
+            effectiveLowStockThreshold: 1,
             routineTag: 1,
             brand: 1,
           },
@@ -222,6 +270,11 @@ export const getAdminDashboardSummary = async (
         itemType: 'routineTag' in item ? 'combo' : 'product',
         title: item.title ?? 'Untitled item',
         stock: item.stock ?? 0,
+        effectiveLowStockThreshold: item.effectiveLowStockThreshold ?? defaultLowStockThreshold,
+        stockStatus: getStockStatus(
+          item.stock ?? 0,
+          item.effectiveLowStockThreshold ?? defaultLowStockThreshold
+        ) as 'low_stock' | 'out_of_stock',
         context: String(
           'routineTag' in item
             ? item.routineTag ?? item.brand ?? '—'
@@ -232,11 +285,15 @@ export const getAdminDashboardSummary = async (
       .slice(0, INVENTORY_ATTENTION_LIMIT);
 
     const completedRevenue = completedRevenueResult[0]?.completedRevenue ?? 0;
+    const lowStockCount = lowStockProducts + lowStockCombos;
+    const outOfStockCount = outOfStockProducts + outOfStockCombos;
 
     const response: DashboardSummaryResponse = {
       totalOrders,
       totalProducts,
-      lowStockCount: lowStockProducts + lowStockCombos,
+      lowStockCount,
+      outOfStockCount,
+      restockNeededCount: lowStockCount + outOfStockCount,
       completedRevenue,
       orderStatusCounts,
       recentOrders,
