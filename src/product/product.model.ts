@@ -33,12 +33,26 @@ export interface IProduct {
   discountPrice?: number;
   productname?: string;
   stock: number;
+  lowStockThreshold?: number | null;
+  availabilityMode?: 'in_stock' | 'pre_order';
+  preOrder?: {
+    expectedArrivalDate?: Date;
+    quantityLimit?: number;
+    customerMessage?: string;
+    status?: 'accepting' | 'closed' | 'arrived';
+    reservedQuantity?: number;
+  };
   isBestSeller: boolean;
   isNewArrival: boolean;
   isTrending: boolean;
   rating: number;
   numReviews: number;
   media?: MediaAsset[];
+  crossSellRecommendations?: Array<{
+    productId: mongoose.Types.ObjectId;
+    priority: number;
+    enabled: boolean;
+  }>;
 }
 
 export interface IProductDocument extends IProduct, Document {
@@ -177,6 +191,61 @@ const ProductSchema = new Schema<IProductDocument>(
       validate: integerStockValidator,
     },
 
+    lowStockThreshold: {
+      type: Number,
+      default: null,
+      min: [0, 'Low stock threshold cannot be negative'],
+      validate: {
+        validator(value: number | null | undefined) {
+          return value == null || Number.isInteger(value);
+        },
+        message: 'Low stock threshold must be a non-negative integer',
+      },
+    },
+
+    availabilityMode: {
+      type: String,
+      enum: ['in_stock', 'pre_order'],
+      default: 'in_stock',
+      index: true,
+    },
+
+    preOrder: {
+      expectedArrivalDate: {
+        type: Date,
+        default: undefined,
+      },
+      quantityLimit: {
+        type: Number,
+        min: [0, 'Pre-order quantity limit cannot be negative'],
+        validate: {
+          validator(value: number | null | undefined) {
+            return value == null || Number.isInteger(value);
+          },
+          message: 'Pre-order quantity limit must be a non-negative integer',
+        },
+        default: undefined,
+      },
+      customerMessage: {
+        type: String,
+        trim: true,
+        maxlength: [500, 'Pre-order customer message cannot exceed 500 characters'],
+        default: undefined,
+      },
+      status: {
+        type: String,
+        enum: ['accepting', 'closed', 'arrived'],
+        default: 'accepting',
+      },
+      reservedQuantity: {
+        type: Number,
+        min: [0, 'Reserved pre-order quantity cannot be negative'],
+        validate: integerStockValidator,
+        default: 0,
+        select: true,
+      },
+    },
+
     isBestSeller: {
       type: Boolean,
       default: false,
@@ -203,6 +272,32 @@ const ProductSchema = new Schema<IProductDocument>(
       type: Number,
       default: 0,
       min: [0, 'Review count cannot be negative'],
+    },
+
+    crossSellRecommendations: {
+      type: [
+        {
+          productId: {
+            type: Schema.Types.ObjectId,
+            ref: 'Product',
+            required: [true, 'Recommended product is required'],
+          },
+          priority: {
+            type: Number,
+            default: 0,
+            min: [0, 'Recommendation priority cannot be negative'],
+            validate: {
+              validator: Number.isFinite,
+              message: 'Recommendation priority must be a finite number',
+            },
+          },
+          enabled: {
+            type: Boolean,
+            default: true,
+          },
+        },
+      ],
+      default: [],
     },
   },
   {
@@ -246,6 +341,22 @@ const ProductSchema = new Schema<IProductDocument>(
         }
         delete r.salePrice;
 
+        r.availabilityMode = r.availabilityMode ?? 'in_stock';
+        if (r.preOrder && (r.availabilityMode === 'pre_order' || r.preOrder.status === 'arrived')) {
+          const quantityLimit = Number(r.preOrder.quantityLimit ?? 0);
+          const reservedQuantity = Number(r.preOrder.reservedQuantity ?? 0);
+          r.preOrder = {
+            expectedArrivalDate: r.preOrder.expectedArrivalDate,
+            quantityLimit,
+            customerMessage: r.preOrder.customerMessage,
+            status: r.preOrder.status ?? 'accepting',
+            reservedQuantity,
+            remainingQuantity: Math.max(quantityLimit - reservedQuantity, 0),
+          };
+        } else {
+          r.preOrder = undefined;
+        }
+
         return r;
       },
     },
@@ -258,6 +369,8 @@ ProductSchema.index({ isBestSeller: 1 });
 ProductSchema.index({ isNewArrival: 1 });
 ProductSchema.index({ isTrending: 1 });
 ProductSchema.index({ brand: 1, category: 1 });
+ProductSchema.index({ availabilityMode: 1, 'preOrder.status': 1 });
+ProductSchema.index({ 'crossSellRecommendations.productId': 1 });
 ProductSchema.index({ skinType: 1 });
 ProductSchema.index({ skinConcern: 1 });
 // Text index for search

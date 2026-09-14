@@ -24,6 +24,12 @@ type AdminOrderItem = {
   quantity: number;
   price: number;
   thumbnail: string;
+  fulfillmentType?: 'regular' | 'pre_order';
+  preOrderSnapshot?: {
+    expectedArrivalDate?: Date | string;
+    customerMessage?: string;
+    quantityLimit?: number;
+  };
 };
 
 type RawOrderUser =
@@ -51,6 +57,12 @@ type RawOrderRecord = {
     quantity?: number;
     price?: number;
     thumbnail?: string;
+    fulfillmentType?: 'regular' | 'pre_order';
+    preOrderSnapshot?: {
+      expectedArrivalDate?: Date | string;
+      customerMessage?: string;
+      quantityLimit?: number;
+    };
   }>;
   shippingAddress?: {
     name?: string;
@@ -79,6 +91,9 @@ type RawOrderRecord = {
   orderStatus?: OrderStatus;
   createdAt?: string | Date;
   updatedAt?: string | Date;
+  containsPreOrder?: boolean;
+  expectedReadinessDate?: string | Date;
+  preOrderReservationsReleased?: boolean;
 };
 
 type AdminOrderSummary = {
@@ -98,6 +113,8 @@ type AdminOrderSummary = {
   orderStatus: OrderStatus;
   status: OrderStatus;
   trackingStatus: OrderStatus;
+  containsPreOrder?: boolean;
+  expectedReadinessDate?: string | Date;
 };
 
 type AdminOrderDetail = AdminOrderSummary & {
@@ -141,6 +158,66 @@ const createHttpError = (statusCode: number, message: string): HttpError => {
 const isValidOrderStatus = (status: unknown): status is OrderStatus =>
   typeof status === 'string' && ALLOWED_ORDER_STATUSES.includes(status as OrderStatus);
 
+const releasePreOrderReservation = async (
+  item: NonNullable<RawOrderRecord['items']>[number],
+  session: mongoose.ClientSession,
+  options: { returnToSellableStockOnArrived: boolean }
+): Promise<void> => {
+  const quantity = item.quantity ?? 0;
+
+  if (!item.sourceId || !mongoose.Types.ObjectId.isValid(item.sourceId)) {
+    throw createHttpError(
+      400,
+      `Order item ${item.title ?? 'unknown item'} is missing a valid catalog reference`
+    );
+  }
+
+  if (!Number.isInteger(quantity) || quantity <= 0) {
+    throw createHttpError(
+      400,
+      `Order item ${item.title ?? 'unknown item'} has an invalid quantity`
+    );
+  }
+
+  if (options.returnToSellableStockOnArrived) {
+    const arrivedUpdate = await Product.findOneAndUpdate(
+      {
+        _id: item.sourceId,
+        'preOrder.status': 'arrived',
+        'preOrder.reservedQuantity': { $gte: quantity },
+      },
+      {
+        $inc: {
+          'preOrder.reservedQuantity': -quantity,
+          stock: quantity,
+        },
+      },
+      { new: true, session }
+    ).exec();
+
+    if (arrivedUpdate) {
+      return;
+    }
+  }
+
+  const reservationUpdate = await Product.findOneAndUpdate(
+    {
+      _id: item.sourceId,
+      'preOrder.reservedQuantity': { $gte: quantity },
+      ...(options.returnToSellableStockOnArrived ? { 'preOrder.status': { $ne: 'arrived' } } : {}),
+    },
+    { $inc: { 'preOrder.reservedQuantity': -quantity } },
+    { new: true, session }
+  ).exec();
+
+  if (!reservationUpdate) {
+    throw createHttpError(
+      404,
+      `Referenced pre-order product was not found for order item ${item.title ?? item.sourceId}`
+    );
+  }
+};
+
 const restoreCancelledOrderItemStock = async (
   item: NonNullable<RawOrderRecord['items']>[number],
   session: mongoose.ClientSession
@@ -163,6 +240,11 @@ const restoreCancelledOrderItemStock = async (
       400,
       `Order item ${item.title ?? 'unknown item'} has an invalid quantity`
     );
+  }
+
+  if (item.itemType === 'product' && item.fulfillmentType === 'pre_order') {
+    await releasePreOrderReservation(item, session, { returnToSellableStockOnArrived: true });
+    return;
   }
 
   const updatedItem =
@@ -214,6 +296,8 @@ const formatOrderItems = (items: RawOrderRecord['items']): AdminOrderItem[] =>
     quantity: item.quantity ?? 0,
     price: item.price ?? 0,
     thumbnail: item.thumbnail ?? '',
+    fulfillmentType: item.fulfillmentType ?? 'regular',
+    preOrderSnapshot: item.preOrderSnapshot,
   }));
 
 const formatOrder = (order: RawOrderRecord): AdminOrderSummary | AdminOrderDetail => {
@@ -240,6 +324,9 @@ const formatOrder = (order: RawOrderRecord): AdminOrderSummary | AdminOrderDetai
     orderStatus: order.orderStatus ?? OrderStatus.PENDING,
     status: order.orderStatus ?? OrderStatus.PENDING,
     trackingStatus: order.orderStatus ?? OrderStatus.PENDING,
+    containsPreOrder:
+      order.containsPreOrder ?? items.some((item) => item.fulfillmentType === 'pre_order'),
+    expectedReadinessDate: order.expectedReadinessDate,
   };
 
   if (!order.shippingAddress) {
@@ -318,8 +405,14 @@ export const getAdminOrders = async (req: AuthenticatedRequest, res: Response): 
   const search = typeof req.query.search === 'string' ? req.query.search : undefined;
   const orderStatus = typeof req.query.orderStatus === 'string' ? req.query.orderStatus : undefined;
   const paymentStatus = typeof req.query.paymentStatus === 'string' ? req.query.paymentStatus : undefined;
+  const fulfillment = typeof req.query.fulfillment === 'string' ? req.query.fulfillment : undefined;
 
   const baseMatch = buildBaseMatch(orderStatus, paymentStatus);
+  if (fulfillment === 'regular') {
+    baseMatch.containsPreOrder = { $ne: true };
+  } else if (fulfillment === 'pre_order') {
+    baseMatch.containsPreOrder = true;
+  }
   const searchMatch = buildSearchMatch(search);
 
   const pipeline: PipelineStage[] = [
@@ -444,10 +537,10 @@ export const updateAdminOrderStatus = async (
 
       const currentStatus = order.orderStatus ?? OrderStatus.PENDING;
 
-      if (currentStatus === OrderStatus.CANCELLED && nextStatus !== OrderStatus.CANCELLED) {
+      if (currentStatus === OrderStatus.CANCELLED) {
         throw createHttpError(
           400,
-          'Cancelled orders cannot be moved back to a fulfillment status'
+          'Cancelled orders cannot be updated'
         );
       }
 
@@ -455,10 +548,52 @@ export const updateAdminOrderStatus = async (
         return order.toObject() as RawOrderRecord;
       }
 
+      if (nextStatus === OrderStatus.SHIPPED && order.containsPreOrder) {
+        const preOrderProductIds = order.items
+          .filter((item: { itemType?: string; fulfillmentType?: string }) => item.itemType === 'product' && item.fulfillmentType === 'pre_order')
+          .map((item: { sourceId?: string }) => item.sourceId)
+          .filter((id: string | undefined): id is string =>
+            typeof id === 'string' && mongoose.Types.ObjectId.isValid(id)
+          );
+        const arrivedProducts = await Product.countDocuments({
+          _id: { $in: preOrderProductIds },
+          $or: [
+            { availabilityMode: 'in_stock' },
+            { 'preOrder.status': 'arrived' },
+          ],
+        }).session(session);
+
+        if (arrivedProducts !== preOrderProductIds.length) {
+          throw createHttpError(
+            400,
+            'Orders containing unarrived pre-order items cannot be marked shipped.'
+          );
+        }
+      }
+
       if (nextStatus === OrderStatus.CANCELLED) {
         for (const item of order.items) {
+          if (item.fulfillmentType === 'pre_order' && order.preOrderReservationsReleased) {
+            continue;
+          }
           await restoreCancelledOrderItemStock(item as NonNullable<RawOrderRecord['items']>[number], session);
         }
+        if (order.containsPreOrder) {
+          order.preOrderReservationsReleased = true;
+        }
+      }
+
+      if (nextStatus === OrderStatus.DELIVERED && order.containsPreOrder && !order.preOrderReservationsReleased) {
+        for (const item of order.items) {
+          if (item.fulfillmentType === 'pre_order') {
+            await releasePreOrderReservation(
+              item as NonNullable<RawOrderRecord['items']>[number],
+              session,
+              { returnToSellableStockOnArrived: false }
+            );
+          }
+        }
+        order.preOrderReservationsReleased = true;
       }
 
       order.orderStatus = nextStatus;
