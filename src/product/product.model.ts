@@ -48,6 +48,11 @@ export interface IProduct {
   rating: number;
   numReviews: number;
   media?: MediaAsset[];
+  crossSellRecommendations?: Array<{
+    productId: mongoose.Types.ObjectId;
+    priority: number;
+    enabled: boolean;
+  }>;
 }
 
 export interface IProductDocument extends IProduct, Document {
@@ -268,6 +273,32 @@ const ProductSchema = new Schema<IProductDocument>(
       default: 0,
       min: [0, 'Review count cannot be negative'],
     },
+
+    crossSellRecommendations: {
+      type: [
+        {
+          productId: {
+            type: Schema.Types.ObjectId,
+            ref: 'Product',
+            required: [true, 'Recommended product is required'],
+          },
+          priority: {
+            type: Number,
+            default: 0,
+            min: [0, 'Recommendation priority cannot be negative'],
+            validate: {
+              validator: Number.isFinite,
+              message: 'Recommendation priority must be a finite number',
+            },
+          },
+          enabled: {
+            type: Boolean,
+            default: true,
+          },
+        },
+      ],
+      default: [],
+    },
   },
   {
     timestamps: true,
@@ -339,6 +370,7 @@ ProductSchema.index({ isNewArrival: 1 });
 ProductSchema.index({ isTrending: 1 });
 ProductSchema.index({ brand: 1, category: 1 });
 ProductSchema.index({ availabilityMode: 1, 'preOrder.status': 1 });
+ProductSchema.index({ 'crossSellRecommendations.productId': 1 });
 ProductSchema.index({ skinType: 1 });
 ProductSchema.index({ skinConcern: 1 });
 // Text index for search

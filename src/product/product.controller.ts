@@ -6,6 +6,10 @@ import mongoose from 'mongoose';
 import { extractMediaUrls, normalizeMediaAssets } from '../media/media.utils';
 import type { MediaAsset } from '../media/media.types';
 import { normalizeOptionalLowStockThreshold } from '../inventory/inventory.service';
+import {
+  getCartCrossSellRecommendations,
+  normalizeCrossSellRecommendations,
+} from '../cross-sell/cross-sell.service';
 
 // ─── Types ────────────────────────────────────────────────────────────────
 
@@ -55,6 +59,7 @@ type ProductMutationBody = Partial<
     | 'isBestSeller'
     | 'isNewArrival'
     | 'isTrending'
+    | 'crossSellRecommendations'
   >
 >;
 
@@ -83,6 +88,7 @@ const mutationFields: (keyof ProductMutationBody)[] = [
   'isBestSeller',
   'isNewArrival',
   'isTrending',
+  'crossSellRecommendations',
 ];
 
 const escapeRegex = (value: string): string =>
@@ -281,6 +287,12 @@ const findDuplicateSlug = async (slug: string, excludeId?: string): Promise<bool
   return Boolean(duplicate);
 };
 
+const populateCrossSellRecommendations = (query: mongoose.Query<any, any>) =>
+  query.populate({
+    path: 'crossSellRecommendations.productId',
+    select: 'title name images media',
+  });
+
 const buildExactMatchCondition = (
   field: string,
   values: string[]
@@ -471,6 +483,13 @@ export const createProduct = async (req: Request, res: Response): Promise<void> 
     normalizeSkincareFields(body);
     normalizeInventoryFields(body);
     normalizePreOrderFields(body);
+    const normalizedCrossSellRecommendations = await normalizeCrossSellRecommendations(
+      undefined,
+      (body as Record<string, unknown>).crossSellRecommendations
+    );
+    if (normalizedCrossSellRecommendations !== undefined) {
+      body.crossSellRecommendations = normalizedCrossSellRecommendations;
+    }
 
     // Validate required fields
   if (!body.title || !body.brand || !body.category || body.price === undefined || body.price === null) {
@@ -600,6 +619,13 @@ export const updateProduct = async (req: Request, res: Response): Promise<void> 
     normalizeSkincareFields(body);
     normalizeInventoryFields(body);
     normalizePreOrderFields(body);
+    const normalizedCrossSellRecommendations = await normalizeCrossSellRecommendations(
+      id,
+      (body as Record<string, unknown>).crossSellRecommendations
+    );
+    if (normalizedCrossSellRecommendations !== undefined) {
+      body.crossSellRecommendations = normalizedCrossSellRecommendations;
+    }
 
     if (
       (body.title !== undefined && body.title.trim() === '') ||
@@ -633,6 +659,10 @@ export const updateProduct = async (req: Request, res: Response): Promise<void> 
     });
 
     await product.save();
+    await product.populate({
+      path: 'crossSellRecommendations.productId',
+      select: 'title name images media',
+    });
 
     res.status(200).json({
       success: true,
@@ -809,6 +839,24 @@ export const markPreOrderArrived = async (req: Request, res: Response): Promise<
     res.status(500).json({ success: false, message: 'Internal server error' });
   } finally {
     await session.endSession();
+  }
+};
+
+export const getCartRecommendations = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const recommendations = await getCartCrossSellRecommendations(req.body?.productIds);
+
+    res.status(200).json({
+      success: true,
+      recommendations,
+    });
+  } catch (error) {
+    const err = error as { statusCode?: number; message?: string; code?: string };
+    res.status(err.statusCode ?? 400).json({
+      success: false,
+      message: err.message ?? 'Unable to fetch cross-sell recommendations',
+      code: err.code ?? 'cross_sell_recommendations_failed',
+    });
   }
 };
 
@@ -1071,7 +1119,7 @@ export const getProductByIdOrSlug = async (req: Request, res: Response): Promise
       ? { _id: idOrSlug }
       : { slug: idOrSlug.toLowerCase() };
 
-    const product = await Product.findOne(query);
+    const product = await populateCrossSellRecommendations(Product.findOne(query));
 
     if (!product) {
       res.status(404).json({

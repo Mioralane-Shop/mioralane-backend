@@ -3,6 +3,7 @@ import { protect, adminOnly } from '../middleware/auth.middleware';
 import {
   createProduct,
   deleteProduct,
+  getCartRecommendations,
   getProducts,
   getProductByIdOrSlug,
   markPreOrderArrived,
@@ -13,6 +14,7 @@ const router = Router();
 
 // Public routes
 router.get('/', getProducts as RequestHandler);
+router.post('/recommendations/cart', getCartRecommendations as RequestHandler);
 router.get('/:idOrSlug', getProductByIdOrSlug as RequestHandler);
 
 // Admin-only routes

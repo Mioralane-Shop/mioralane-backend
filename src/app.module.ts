@@ -19,6 +19,7 @@ import {
 } from './promotion/promotion.routes';
 import { adminShippingSettingsRoutes, shippingRoutes } from './shipping/shipping.routes';
 import { adminInventorySettingsRoutes } from './inventory/inventory.routes';
+import { adminCrossSellSettingsRoutes } from './cross-sell/cross-sell.routes';
 import { authLimiter } from './middleware/rateLimiter.middleware';
 import { swaggerSpec, swaggerServe, swaggerSetup } from './swagger';
 
@@ -121,6 +122,7 @@ const createApp = (): express.Application => {
   app.use('/api/admin/coupons', adminCouponRoutes);
   app.use('/api/admin/settings', adminShippingSettingsRoutes);
   app.use('/api/admin/settings', adminInventorySettingsRoutes);
+  app.use('/api/admin/settings', adminCrossSellSettingsRoutes);
   app.use('/api/promotions', promotionPublicRoutes);
   app.use('/api/shipping', shippingRoutes);
 
