@@ -20,6 +20,8 @@ import {
 import { adminShippingSettingsRoutes, shippingRoutes } from './shipping/shipping.routes';
 import { adminInventorySettingsRoutes } from './inventory/inventory.routes';
 import { adminCrossSellSettingsRoutes } from './cross-sell/cross-sell.routes';
+import reviewRoutes from './review/review.routes';
+import adminReviewRoutes from './review/admin-review.routes';
 import { authLimiter } from './middleware/rateLimiter.middleware';
 import { swaggerSpec, swaggerServe, swaggerSetup } from './swagger';
 
@@ -128,6 +130,12 @@ const createApp = (): express.Application => {
 
   // Wishlist routes (authenticated user flow)
   app.use('/api/wishlist', wishlistRoutes);
+
+  // Reviews (public product reviews + authenticated customer submission/history)
+  app.use('/api/reviews', reviewRoutes);
+
+  // Review moderation (admin only)
+  app.use('/api/admin/reviews', adminReviewRoutes);
 
   // Real reusable media upload/delete routes for product and combo assets
   app.use('/api/media', mediaRoutes);

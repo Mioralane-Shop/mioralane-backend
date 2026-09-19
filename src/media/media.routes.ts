@@ -79,6 +79,18 @@ router.delete(
   }
 );
 
+// Review images are temporarily disabled — restore this route to re-enable review image uploads.
+// // Review images are uploaded by authenticated customers. The asset type is
+// // forced to "review" server-side; admin image routes stay admin-only.
+// router.post(
+//   '/review-images',
+//   protect as RequestHandler,
+//   handleSingleUpload,
+//   (req: Request, res: Response, next: NextFunction) => {
+//     void mediaController.uploadReviewImage(req, res).catch(next);
+//   }
+// );
+
 router.use((error: unknown, _req: Request, res: Response, _next: NextFunction) => {
   console.error('Media route error:', error);
   res.status(500).json({

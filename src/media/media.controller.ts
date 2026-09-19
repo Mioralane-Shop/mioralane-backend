@@ -63,12 +63,28 @@ const parseAssetType = (value: unknown): MediaAssetType | null => {
 };
 
 export class MediaController {
-  constructor(private readonly imageKitService: ImageKitService) {}
+  constructor(private readonly imageKitService: ImageKitService) { }
 
   async uploadImage(req: Request, res: Response): Promise<void> {
+    await this.uploadWithAssetType(req, res, parseAssetType(req.body?.assetType));
+  }
+
+  // Review images are temporarily disabled — restore this method to re-enable review image uploads.
+  // /**
+  //  * Customer review image uploads. The asset type is forced to "review" so a
+  //  * customer can never write into product/combo/campaign media folders.
+  //  */
+  // async uploadReviewImage(req: Request, res: Response): Promise<void> {
+  //   await this.uploadWithAssetType(req, res, 'review');
+  // }
+
+  private async uploadWithAssetType(
+    req: Request,
+    res: Response,
+    assetType: MediaAssetType | null
+  ): Promise<void> {
     try {
       const file = (req as Request & { file?: MulterFile }).file;
-      const assetType = parseAssetType(req.body?.assetType);
 
       if (!assetType) {
         res.status(400).json({
