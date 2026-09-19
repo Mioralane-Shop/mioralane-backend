@@ -1,82 +1,111 @@
 import { Response } from 'express';
-import mongoose, { Schema } from 'mongoose';
+import mongoose from 'mongoose';
 import { AuthenticatedRequest } from '../middleware/auth.middleware';
-import { UserModel } from '../auth/user.model';
-import Product from '../product/product.model';
-import Combo from '../combo/combo.model';
+import {
+  WishlistSort,
+  addWishlistItem as addWishlistItemService,
+  createWishlistError,
+  getWishlistSnapshot,
+  normalizeWishlistItemType,
+  normalizeWishlistSort,
+  removeWishlistItem as removeWishlistItemService,
+  toggleWishlistItem as toggleWishlistItemService,
+} from './wishlist.service';
 
-const wishlistProductSelect =
-  'title slug brand category description skinType skinConcern price salePrice badge images hoverImage volume stock isBestSeller isNewArrival isTrending rating numReviews createdAt updatedAt';
+const respondWithError = (res: Response, error: unknown, fallbackMessage: string): void => {
+  const err = error as { statusCode?: number; message?: string; code?: string };
 
-const wishlistComboSelect =
-  'title slug badge description price compareAtPrice savings includedItems routineTag category brand images hoverImage size volume stock rating numReviews concerns skinType isBestSeller isNewArrival createdAt updatedAt';
+  if ((err.statusCode ?? 500) >= 500) {
+    console.error('[wishlist]', error);
+  }
 
-const normalizeWishlistIds = (wishlist: unknown[]): string[] =>
-  wishlist
-    .map((item) => {
-      if (!item) return null;
-      if (typeof item === 'object' && '_id' in item) {
-        return (item as { _id: unknown })._id?.toString();
-      }
-      return item.toString();
-    })
-    .filter(Boolean) as string[];
+  res.status(err.statusCode ?? 500).json({
+    success: false,
+    message: err.message ?? fallbackMessage,
+    ...(err.code ? { code: err.code } : {}),
+  });
+};
 
-const compactPopulatedWishlist = <T>(wishlist: unknown[]): T[] =>
-  wishlist.filter((item): item is T => Boolean(item));
+/**
+ * The legacy response shape (`productIds` + `products`) is preserved so the
+ * existing hearts/count keep working; `items` adds the per-item price, stock
+ * and price-drop data the upgraded wishlist UI needs.
+ */
+const respondWithWishlist = async (
+  res: Response,
+  userId: string,
+  sort: WishlistSort,
+  extra: Record<string, unknown> = {}
+): Promise<void> => {
+  const snapshot = await getWishlistSnapshot(userId, sort);
 
-const populateWishlist = (userId: string) =>
-  UserModel.findById(userId)
-    .populate({
-      path: 'wishlist',
-      select: wishlistProductSelect,
-    })
-    .populate({
-      path: 'comboWishlist',
-      select: wishlistComboSelect,
+  res.status(200).json({
+    success: true,
+    sort: snapshot.sort,
+    productIds: snapshot.itemIds,
+    products: snapshot.products,
+    items: snapshot.items,
+    ...extra,
+  });
+};
+
+const readItemId = (value: unknown): mongoose.Types.ObjectId => {
+  const raw = typeof value === 'string' ? value.trim() : '';
+
+  if (!raw || !mongoose.Types.ObjectId.isValid(raw)) {
+    throw createWishlistError(400, 'A valid itemId is required', 'invalid_item_id');
+  }
+
+  return new mongoose.Types.ObjectId(raw);
+};
+
+/** Accepts `itemId` (current) and `productId` (legacy field name). */
+const readWishlistTarget = (body: unknown) => {
+  const payload = (body ?? {}) as { itemId?: unknown; productId?: unknown; itemType?: unknown };
+
+  return {
+    itemId: readItemId(payload.itemId ?? payload.productId),
+    itemType: normalizeWishlistItemType(payload.itemType),
+  };
+};
+
+export const getWishlist = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    await respondWithWishlist(res, req.user.id, normalizeWishlistSort(req.query.sort));
+  } catch (error) {
+    respondWithError(res, error, 'Unable to load your wishlist');
+  }
+};
+
+/** Idempotent add — re-saving an item keeps the price/date it was first saved at. */
+export const addToWishlist = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    const { itemId, itemType } = readWishlistTarget(req.body);
+    const { isWishlisted } = await addWishlistItemService(req.user.id, itemId, itemType);
+
+    await respondWithWishlist(res, req.user.id, normalizeWishlistSort(req.body?.sort), {
+      isWishlisted,
     });
-
-async function findWishlistTarget(productId: string, itemType: string | undefined) {
-  if (itemType === 'combo') {
-    return Combo.findById(productId).select('_id').lean();
+  } catch (error) {
+    respondWithError(res, error, 'Unable to add this item to your wishlist');
   }
+};
 
-  if (!itemType || itemType === 'product') {
-    return Product.findById(productId).select('_id').lean();
-  }
-
-  return null;
-}
-
-export const getWishlist = async (
+export const removeFromWishlist = async (
   req: AuthenticatedRequest,
   res: Response
 ): Promise<void> => {
   try {
-    const user = await populateWishlist(req.user.id);
+    const itemId = readItemId(req.params.itemId);
+    const itemType =
+      req.query.itemType === undefined ? undefined : normalizeWishlistItemType(req.query.itemType);
+    const { removed } = await removeWishlistItemService(req.user.id, itemId, itemType);
 
-    if (!user) {
-      res.status(401).json({ success: false, message: 'User session is no longer valid' });
-      return;
-    }
-
-    const productWishlist = compactPopulatedWishlist(user.wishlist ?? []);
-    const comboWishlist = compactPopulatedWishlist(user.comboWishlist ?? []);
-
-    res.status(200).json({
-      success: true,
-      productIds: [
-        ...normalizeWishlistIds(productWishlist),
-        ...normalizeWishlistIds(comboWishlist),
-      ],
-      products: [...productWishlist, ...comboWishlist],
+    await respondWithWishlist(res, req.user.id, normalizeWishlistSort(req.query.sort), {
+      removed,
     });
   } catch (error) {
-    console.error('[getWishlist]', error);
-    res.status(500).json({
-      success: false,
-      message: error instanceof Error ? error.message : 'Internal server error',
-    });
+    respondWithError(res, error, 'Unable to remove this item from your wishlist');
   }
 };
 
@@ -85,69 +114,13 @@ export const toggleWishlist = async (
   res: Response
 ): Promise<void> => {
   try {
-    const { productId, itemType } = req.body || {};
+    const { itemId, itemType } = readWishlistTarget(req.body);
+    const { isWishlisted } = await toggleWishlistItemService(req.user.id, itemId, itemType);
 
-    if (!productId || !mongoose.Types.ObjectId.isValid(productId)) {
-      res.status(400).json({ success: false, message: 'A valid productId is required' });
-      return;
-    }
-
-    if (itemType !== 'product' && itemType !== 'combo' && itemType != null) {
-      res.status(400).json({ success: false, message: 'itemType must be product or combo' });
-      return;
-    }
-
-    const target = await findWishlistTarget(productId, itemType);
-
-    if (!target) {
-      res.status(404).json({
-        success: false,
-        message: `${itemType === 'combo' ? 'Combo' : 'Product'} not found`,
-      });
-      return;
-    }
-
-    const user = await UserModel.findById(req.user.id);
-
-    if (!user) {
-      res.status(401).json({ success: false, message: 'User session is no longer valid' });
-      return;
-    }
-
-    const isCombo = itemType === 'combo';
-    const currentWishlist = isCombo ? user.comboWishlist ?? [] : user.wishlist ?? [];
-    const currentIds = normalizeWishlistIds(currentWishlist);
-    const exists = currentIds.includes(productId);
-    const nextWishlist = exists
-      ? currentWishlist.filter((id) => id.toString() !== productId)
-      : [...currentWishlist, new mongoose.Types.ObjectId(productId) as unknown as Schema.Types.ObjectId];
-
-    if (isCombo) {
-      user.comboWishlist = nextWishlist;
-    } else {
-      user.wishlist = nextWishlist;
-    }
-
-    await user.save();
-
-    const populatedUser = await populateWishlist(req.user.id);
-    const productWishlist = compactPopulatedWishlist(populatedUser?.wishlist ?? []);
-    const comboWishlist = compactPopulatedWishlist(populatedUser?.comboWishlist ?? []);
-
-    res.status(200).json({
-      success: true,
-      isWishlisted: !exists,
-      productIds: [
-        ...normalizeWishlistIds(productWishlist),
-        ...normalizeWishlistIds(comboWishlist),
-      ],
-      products: [...productWishlist, ...comboWishlist],
+    await respondWithWishlist(res, req.user.id, normalizeWishlistSort(req.body?.sort), {
+      isWishlisted,
     });
   } catch (error) {
-    console.error('[toggleWishlist]', error);
-    res.status(500).json({
-      success: false,
-      message: error instanceof Error ? error.message : 'Internal server error',
-    });
+    respondWithError(res, error, 'Unable to update your wishlist');
   }
 };

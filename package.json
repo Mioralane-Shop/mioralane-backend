@@ -11,7 +11,8 @@
     "start:prod": "node -r tsconfig-paths/register dist/main",
     "dev": "tsx watch src/main.ts",
     "seed:combos": "tsx src/scripts/seed-combos.ts",
-    "migrate:wishlist": "tsx src/scripts/migrate-user-wishlist.ts"
+    "migrate:wishlist": "tsx src/scripts/migrate-user-wishlist.ts",
+    "migrate:wishlist-items": "tsx src/scripts/migrate-wishlist-items.ts"
   },
   "dependencies": {
     "@imagekit/nodejs": "^7.11.0",
