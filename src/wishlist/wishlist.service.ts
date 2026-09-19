@@ -296,17 +296,19 @@ export const addWishlistItem = async (
     userId: string,
     itemId: mongoose.Types.ObjectId,
     itemType: WishlistItemType
-): Promise<{ isWishlisted: boolean; target: WishlistTarget }> => {
+): Promise<{ isWishlisted: boolean; created: boolean; target: WishlistTarget }> => {
     const target = await loadWishlistTarget(itemId, itemType);
+    let created = false;
 
     try {
         // $setOnInsert keeps the ORIGINAL saved price/date when the customer taps
         // the heart again on an item that is already saved.
-        await WishlistItem.updateOne(
+        const result = await WishlistItem.updateOne(
             { user: userId, itemId, itemType },
             { $setOnInsert: { user: userId, itemId, itemType, priceAtAdd: target.currentPrice } },
             { upsert: true }
         );
+        created = (result.upsertedCount ?? 0) > 0;
     } catch (error) {
         // Unique index raced with a parallel add — the item is saved either way.
         if (!(error instanceof Error) || !/E11000/.test(error.message)) {
@@ -314,7 +316,7 @@ export const addWishlistItem = async (
         }
     }
 
-    return { isWishlisted: true, target };
+    return { isWishlisted: true, created, target };
 };
 
 export const removeWishlistItem = async (
@@ -337,7 +339,7 @@ export const toggleWishlistItem = async (
     userId: string,
     itemId: mongoose.Types.ObjectId,
     itemType: WishlistItemType
-): Promise<{ isWishlisted: boolean }> => {
+): Promise<{ isWishlisted: boolean; target?: WishlistTarget }> => {
     const existing = await WishlistItem.findOne({ user: userId, itemId, itemType });
 
     if (existing) {
@@ -346,5 +348,5 @@ export const toggleWishlistItem = async (
     }
 
     const result = await addWishlistItem(userId, itemId, itemType);
-    return { isWishlisted: result.isWishlisted };
+    return { isWishlisted: result.isWishlisted, target: result.target };
 };

@@ -4,6 +4,7 @@ import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { OAuth2Client } from 'google-auth-library';
 import { UserModel } from './user.model';
+import { recordActivity } from '../activity-log/activity-log.service';
 
 const JWT_SECRET = process.env.JWT_SECRET;
 const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '7d';
@@ -155,6 +156,16 @@ export const registerUser = async (req: Request, res: Response): Promise<void> =
     // Set httpOnly cookie
     setAuthCookie(res, token);
 
+    // No session exists yet at registration, so the actor is the user we just created.
+    await recordActivity(req, {
+      action: 'REGISTER',
+      entityType: user.role === 'admin' ? 'ADMIN' : 'PARTICIPANT',
+      entityId: user._id.toString(),
+      entityName: user.username,
+      actor: { id: user._id.toString(), role: user.role, name: user.username, email: user.email },
+      after: { username: user.username, email: user.email, role: user.role },
+    });
+
     res.status(201).json({
       success: true,
       message: 'User registered successfully',
@@ -261,6 +272,15 @@ export const loginUser = async (req: Request, res: Response): Promise<void> => {
 
     // Set httpOnly cookie
     setAuthCookie(res, token);
+
+    await recordActivity(req, {
+      action: 'LOGIN',
+      entityType: user.role === 'admin' ? 'ADMIN' : 'PARTICIPANT',
+      entityId: user._id.toString(),
+      entityName: user.username,
+      description: `Signed in as ${user.username}`,
+      actor: { id: user._id.toString(), role: user.role, name: user.username, email: user.email },
+    });
 
     res.status(200).json({
       success: true,
@@ -371,6 +391,15 @@ export const googleLogin = async (req: Request, res: Response): Promise<void> =>
 
     // Set httpOnly cookie
     setAuthCookie(res, token);
+
+    await recordActivity(req, {
+      action: 'LOGIN',
+      entityType: user.role === 'admin' ? 'ADMIN' : 'PARTICIPANT',
+      entityId: user._id.toString(),
+      entityName: user.username,
+      description: `Signed in with Google as ${user.username}`,
+      actor: { id: user._id.toString(), role: user.role, name: user.username, email: user.email },
+    });
 
     res.status(200).json({
       success: true,

@@ -16,6 +16,11 @@ import {
   upsertShippingSettings,
   validateAndNormalizeShippingQuoteAddress,
 } from './shipping.service';
+import {
+  buildActivityChanges,
+  recordActivity,
+  resolveUpdateAction,
+} from '../activity-log/activity-log.service';
 
 const resolveQuoteItems = async (rawItems: any[]): Promise<DiscountableOrderItem[]> => {
   const resolved: DiscountableOrderItem[] = [];
@@ -127,7 +132,26 @@ export const getAdminShippingSettings = async (_req: AuthenticatedRequest, res: 
 
 export const updateAdminShippingSettings = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
+    const previousSettings = await getShippingSettings();
     const settings = await upsertShippingSettings(req.body);
+
+    const changes = buildActivityChanges(
+      previousSettings as unknown as Record<string, unknown>,
+      settings as unknown as Record<string, unknown>
+    );
+
+    if (changes.changedFields.length > 0) {
+      await recordActivity(req, {
+        action: resolveUpdateAction(changes.changedFields),
+        entityType: 'SETTINGS',
+        entityId: 'shipping',
+        entityName: 'Shipping settings',
+        before: changes.before,
+        after: changes.after,
+        metadata: { changedFields: changes.changedFields },
+      });
+    }
+
     res.json({ success: true, settings });
   } catch (error) {
     const err = error as { statusCode?: number; message?: string; code?: string };

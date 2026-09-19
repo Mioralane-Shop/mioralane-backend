@@ -20,6 +20,7 @@ import {
 } from './promotion/promotion.routes';
 import { adminShippingSettingsRoutes, shippingRoutes } from './shipping/shipping.routes';
 import { adminInventorySettingsRoutes, adminInventoryRoutes } from './inventory/inventory.routes';
+import { activityLogRoutes } from './activity-log/activity-log.routes';
 import { adminCrossSellSettingsRoutes } from './cross-sell/cross-sell.routes';
 import reviewRoutes from './review/review.routes';
 import adminReviewRoutes from './review/admin-review.routes';
@@ -129,6 +130,9 @@ const createApp = (): express.Application => {
   // Inventory ledger + manual stock operations
   app.use('/api/admin/inventory', adminInventoryRoutes);
   app.use('/api/admin/settings', adminCrossSellSettingsRoutes);
+
+  // Audit trail (admin-only)
+  app.use('/api/activity-logs', activityLogRoutes);
   app.use('/api/promotions', promotionPublicRoutes);
   app.use('/api/shipping', shippingRoutes);
 

@@ -21,6 +21,10 @@ import {
 } from '../shipping/shipping.service';
 import { resolveSavedAddressForCheckout } from '../address/address.service';
 import { recordOrderStockDeductions } from '../inventory/inventory-transaction.service';
+import { pickActivitySnapshot, recordActivity } from '../activity-log/activity-log.service';
+
+/** Fields kept in the participant order snapshot. */
+const ORDER_AUDIT_FIELDS = ['orderNumber', 'orderStatus', 'totalAmount', 'paymentMethod'];
 
 type OrderPayloadItem = {
   itemId?: string;
@@ -468,6 +472,18 @@ export const createOrder = async (req: AuthenticatedRequest, res: Response): Pro
           { session }
         );
       }
+
+      // Participant activity, written in the same transaction as the order so a
+      // rolled-back checkout leaves no log behind.
+      await recordActivity(req, {
+        action: 'CREATE',
+        entityType: 'ORDER',
+        entityId: order._id.toString(),
+        entityName: order.orderNumber ?? order._id.toString(),
+        after: pickActivitySnapshot(order.toObject(), ORDER_AUDIT_FIELDS),
+        metadata: { itemCount: order.items?.length ?? 0 },
+        session,
+      });
 
       return order;
     });

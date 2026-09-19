@@ -11,6 +11,7 @@ import {
   OrderItemStockLine,
   recordCancellationRestorations,
 } from '../inventory/inventory-transaction.service';
+import { recordActivity } from '../activity-log/activity-log.service';
 
 type AdminOrderUser = {
   id: string;
@@ -586,6 +587,8 @@ export const updateAdminOrderStatus = async (
         }
       }
 
+      let restoredStockLineCount = 0;
+
       if (nextStatus === OrderStatus.CANCELLED) {
         const restoredStockLines: OrderItemStockLine[] = [];
 
@@ -615,6 +618,8 @@ export const updateAdminOrderStatus = async (
             session
           );
         }
+
+        restoredStockLineCount = restoredStockLines.length;
       }
 
       if (nextStatus === OrderStatus.DELIVERED && order.containsPreOrder && !order.preOrderReservationsReleased) {
@@ -632,6 +637,23 @@ export const updateAdminOrderStatus = async (
 
       order.orderStatus = nextStatus;
       await order.save({ session });
+
+      // Shares the transaction: a failed status change never leaves a
+      // misleading audit entry behind.
+      await recordActivity(req, {
+        action: nextStatus === OrderStatus.CANCELLED ? 'CANCEL' : 'STATUS_CHANGE',
+        entityType: 'ORDER',
+        entityId: orderId,
+        entityName: order.orderNumber ?? orderId,
+        description:
+          nextStatus === OrderStatus.CANCELLED
+            ? `Cancelled order ${order.orderNumber ?? orderId}`
+            : `Changed order ${order.orderNumber ?? orderId} status to ${nextStatus}`,
+        before: { orderStatus: currentStatus },
+        after: { orderStatus: nextStatus },
+        metadata: { restoredStockLineCount },
+        session,
+      });
 
       return order.toObject() as RawOrderRecord;
     })) as RawOrderRecord;

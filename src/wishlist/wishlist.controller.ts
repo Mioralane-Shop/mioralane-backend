@@ -11,6 +11,34 @@ import {
   removeWishlistItem as removeWishlistItemService,
   toggleWishlistItem as toggleWishlistItemService,
 } from './wishlist.service';
+import { recordActivity } from '../activity-log/activity-log.service';
+
+/** Catalog title for a resolved wishlist item, when we have it. */
+const wishlistItemName = (
+  target: { product?: Record<string, unknown> } | undefined
+): string | undefined => {
+  const title = target?.product?.title;
+  return typeof title === 'string' ? title : undefined;
+};
+
+/** Participant activity for saved/removed wishlist items. */
+const logWishlistActivity = async (
+  req: AuthenticatedRequest,
+  action: 'CREATE' | 'DELETE',
+  itemId: unknown,
+  itemType: string,
+  itemName?: string
+): Promise<void> => {
+  await recordActivity(req, {
+    action,
+    entityType: 'WISHLIST',
+    entityId: String(itemId),
+    entityName: itemName,
+    description: `${action === 'CREATE' ? 'Saved' : 'Removed'} ${itemName ?? `a ${itemType}`} ${action === 'CREATE' ? 'to' : 'from'
+      } the wishlist`,
+    metadata: { itemType },
+  });
+};
 
 const respondWithError = (res: Response, error: unknown, fallbackMessage: string): void => {
   const err = error as { statusCode?: number; message?: string; code?: string };
@@ -81,7 +109,11 @@ export const getWishlist = async (req: AuthenticatedRequest, res: Response): Pro
 export const addToWishlist = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
     const { itemId, itemType } = readWishlistTarget(req.body);
-    const { isWishlisted } = await addWishlistItemService(req.user.id, itemId, itemType);
+    const { isWishlisted, created, target } = await addWishlistItemService(req.user.id, itemId, itemType);
+
+    if (created) {
+      await logWishlistActivity(req, 'CREATE', itemId, itemType, wishlistItemName(target));
+    }
 
     await respondWithWishlist(res, req.user.id, normalizeWishlistSort(req.body?.sort), {
       isWishlisted,
@@ -101,6 +133,10 @@ export const removeFromWishlist = async (
       req.query.itemType === undefined ? undefined : normalizeWishlistItemType(req.query.itemType);
     const { removed } = await removeWishlistItemService(req.user.id, itemId, itemType);
 
+    if (removed) {
+      await logWishlistActivity(req, 'DELETE', itemId, itemType ?? 'product');
+    }
+
     await respondWithWishlist(res, req.user.id, normalizeWishlistSort(req.query.sort), {
       removed,
     });
@@ -115,7 +151,15 @@ export const toggleWishlist = async (
 ): Promise<void> => {
   try {
     const { itemId, itemType } = readWishlistTarget(req.body);
-    const { isWishlisted } = await toggleWishlistItemService(req.user.id, itemId, itemType);
+    const { isWishlisted, target } = await toggleWishlistItemService(req.user.id, itemId, itemType);
+
+    await logWishlistActivity(
+      req,
+      isWishlisted ? 'CREATE' : 'DELETE',
+      itemId,
+      itemType,
+      wishlistItemName(target)
+    );
 
     await respondWithWishlist(res, req.user.id, normalizeWishlistSort(req.body?.sort), {
       isWishlisted,

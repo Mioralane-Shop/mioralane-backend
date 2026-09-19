@@ -15,6 +15,11 @@ import {
   normalizeInventorySort,
   normalizeInventoryTransactionType,
 } from './inventory-transaction.service';
+import {
+  buildActivityChanges,
+  recordActivity,
+  resolveUpdateAction,
+} from '../activity-log/activity-log.service';
 
 export const getAdminInventorySettings = async (
   _req: AuthenticatedRequest,
@@ -29,7 +34,26 @@ export const updateAdminInventorySettings = async (
   res: Response
 ): Promise<void> => {
   try {
+    const previousSettings = await getInventorySettings();
     const settings = await upsertInventorySettings(req.body);
+
+    const changes = buildActivityChanges(
+      previousSettings as unknown as Record<string, unknown>,
+      settings as unknown as Record<string, unknown>
+    );
+
+    if (changes.changedFields.length > 0) {
+      await recordActivity(req, {
+        action: resolveUpdateAction(changes.changedFields),
+        entityType: 'SETTINGS',
+        entityId: 'inventory',
+        entityName: 'Inventory settings',
+        before: changes.before,
+        after: changes.after,
+        metadata: { changedFields: changes.changedFields },
+      });
+    }
+
     res.json({ success: true, settings });
   } catch (error) {
     const err = error as { statusCode?: number; message?: string; code?: string };
@@ -182,7 +206,22 @@ const performInventoryAction =
         });
 
         const item = await getInventoryItemSnapshot(itemType, itemId);
-
+        // High-level admin action only — the detailed stock movement stays in the
+        // inventory ledger, which remains the single source of stock history.
+        await recordActivity(req, {
+          action: 'STOCK_CHANGE',
+          entityType: 'INVENTORY',
+          entityId: itemId,
+          entityName: item.name,
+          description: `${INVENTORY_ACTION_MESSAGES[action]}: ${item.name}`,
+          before: { stock: movement.previousQuantity },
+          after: { stock: movement.newQuantity },
+          metadata: {
+            itemType,
+            transactionType: movement.transactionType,
+            quantityChange: movement.quantityChange,
+          },
+        });
         res.status(201).json({
           success: true,
           message: `${INVENTORY_ACTION_MESSAGES[action]}: ${item.name}`,

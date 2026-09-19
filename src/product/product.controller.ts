@@ -8,9 +8,30 @@ import type { MediaAsset } from '../media/media.types';
 import { normalizeOptionalLowStockThreshold } from '../inventory/inventory.service';
 import { applyCatalogStockChange } from '../inventory/inventory-transaction.service';
 import {
+  buildActivityChanges,
+  pickActivitySnapshot,
+  recordActivity,
+  resolveUpdateAction,
+} from '../activity-log/activity-log.service';
+import {
   getCartCrossSellRecommendations,
   normalizeCrossSellRecommendations,
 } from '../cross-sell/cross-sell.service';
+
+/** Fields kept in activity snapshots — keeps audit rows small and readable. */
+const PRODUCT_AUDIT_FIELDS = [
+  'title',
+  'slug',
+  'brand',
+  'category',
+  'price',
+  'salePrice',
+  'compareAtPrice',
+  'stock',
+  'lowStockThreshold',
+  'availabilityMode',
+  'isActive',
+];
 
 // ─── Types ────────────────────────────────────────────────────────────────
 
@@ -524,6 +545,14 @@ export const createProduct = async (req: Request, res: Response): Promise<void> 
       slug,
     });
 
+    await recordActivity(req, {
+      action: 'CREATE',
+      entityType: 'PRODUCT',
+      entityId: product._id.toString(),
+      entityName: product.title,
+      after: pickActivitySnapshot(product.toObject(), PRODUCT_AUDIT_FIELDS),
+    });
+
     res.status(201).json({
       success: true,
       product,
@@ -614,6 +643,9 @@ export const updateProduct = async (req: Request, res: Response): Promise<void> 
       });
       return;
     }
+
+    // Snapshot before any mutation so the audit trail can diff the edit.
+    const productBeforeEdit = product.toObject();
 
     const body = sanitizeMutationBody((req.body ?? {}) as Record<string, unknown>);
     normalizeProductMedia(body);
@@ -714,6 +746,23 @@ export const updateProduct = async (req: Request, res: Response): Promise<void> 
         message: 'Product not found',
       });
       return;
+    }
+
+    const productChanges = buildActivityChanges(
+      productBeforeEdit,
+      updatedProduct.toObject()
+    );
+
+    if (productChanges.changedFields.length > 0) {
+      await recordActivity(req, {
+        action: resolveUpdateAction(productChanges.changedFields),
+        entityType: 'PRODUCT',
+        entityId: id,
+        entityName: updatedProduct.title,
+        before: productChanges.before,
+        after: productChanges.after,
+        metadata: { changedFields: productChanges.changedFields },
+      });
     }
 
     await updatedProduct.populate({
@@ -824,6 +873,14 @@ export const deleteProduct = async (req: Request, res: Response): Promise<void> 
       console.error('Failed to clean up cross-sell recommendations after deleting product:', cleanupError);
     }
 
+    await recordActivity(req, {
+      action: 'DELETE',
+      entityType: 'PRODUCT',
+      entityId: id,
+      entityName: product.title,
+      before: pickActivitySnapshot(product.toObject(), PRODUCT_AUDIT_FIELDS),
+    });
+
     res.status(200).json({
       success: true,
       message: 'Product deleted successfully',
@@ -839,6 +896,7 @@ export const deleteProduct = async (req: Request, res: Response): Promise<void> 
 
 export const markPreOrderArrived = async (req: Request, res: Response): Promise<void> => {
   const session = await mongoose.startSession();
+  let stockBeforeArrival: Record<string, unknown> | null = null;
 
   try {
     const { id } = req.params as { id: string };
@@ -880,6 +938,11 @@ export const markPreOrderArrived = async (req: Request, res: Response): Promise<
         );
       }
 
+      stockBeforeArrival = pickActivitySnapshot(
+        current.toObject(),
+        PRODUCT_AUDIT_FIELDS
+      );
+
       const previousStock = current.stock ?? 0;
 
       current.stock = actualReceivedQuantity - reservedQuantity;
@@ -905,6 +968,22 @@ export const markPreOrderArrived = async (req: Request, res: Response): Promise<
       });
 
       return current;
+    });
+
+    const arrivalChanges = buildActivityChanges(
+      stockBeforeArrival,
+      pickActivitySnapshot(product.toObject(), PRODUCT_AUDIT_FIELDS)
+    );
+
+    await recordActivity(req, {
+      action: resolveUpdateAction(arrivalChanges.changedFields),
+      entityType: 'PRODUCT',
+      entityId: id,
+      entityName: product.title,
+      description: `Pre-order stock arrived for product "${product.title}"`,
+      before: arrivalChanges.before,
+      after: arrivalChanges.after,
+      metadata: { changedFields: arrivalChanges.changedFields, actualReceivedQuantity },
     });
 
     res.status(200).json({

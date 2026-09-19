@@ -6,6 +6,28 @@ import mongoose from 'mongoose';
 import { extractMediaUrls, normalizeMediaAssets } from '../media/media.utils';
 import type { MediaAsset } from '../media/media.types';
 import { applyCatalogStockChange } from '../inventory/inventory-transaction.service';
+import {
+    buildActivityChanges,
+    pickActivitySnapshot,
+    recordActivity,
+    resolveUpdateAction,
+} from '../activity-log/activity-log.service';
+
+/** Fields kept in activity snapshots — keeps audit rows small and readable. */
+const COMBO_AUDIT_FIELDS = [
+    'title',
+    'slug',
+    'brand',
+    'category',
+    'price',
+    'compareAtPrice',
+    'savings',
+    'stock',
+    'routineTag',
+    'badge',
+    'isBestSeller',
+    'isNewArrival',
+];
 
 // ─── Types ────────────────────────────────────────────────────────────────
 
@@ -160,6 +182,14 @@ export const createCombo = async (req: Request, res: Response): Promise<void> =>
             : 0;
 
         const combo = await Combo.create(data);
+
+        await recordActivity(req, {
+            action: 'CREATE',
+            entityType: 'COMBO',
+            entityId: combo._id.toString(),
+            entityName: combo.title,
+            after: pickActivitySnapshot(combo.toObject(), COMBO_AUDIT_FIELDS),
+        });
 
         res.status(201).json({
             success: true,
@@ -464,6 +494,8 @@ export const updateCombo = async (req: Request, res: Response): Promise<void> =>
 
         const requestedStock = typeof sanitized.stock === 'number' ? sanitized.stock : undefined;
         const previousStock = combo.stock ?? 0;
+        // Snapshot before any mutation so the audit trail can diff the edit.
+        const comboBeforeEdit = combo.toObject();
 
         // Stock is never written directly: every change goes through the
         // inventory ledger so the audit trail cannot be bypassed here.
@@ -498,6 +530,23 @@ export const updateCombo = async (req: Request, res: Response): Promise<void> =>
             } finally {
                 await session.endSession();
             }
+        }
+
+        const comboChanges = buildActivityChanges(
+            comboBeforeEdit,
+            combo.toObject()
+        );
+
+        if (comboChanges.changedFields.length > 0) {
+            await recordActivity(req, {
+                action: resolveUpdateAction(comboChanges.changedFields),
+                entityType: 'COMBO',
+                entityId: id,
+                entityName: combo.title,
+                before: comboChanges.before,
+                after: comboChanges.after,
+                metadata: { changedFields: comboChanges.changedFields },
+            });
         }
 
         res.status(200).json({ success: true, combo });
@@ -564,6 +613,14 @@ export const deleteCombo = async (req: Request, res: Response): Promise<void> =>
             });
             return;
         }
+
+        await recordActivity(req, {
+            action: 'DELETE',
+            entityType: 'COMBO',
+            entityId: id,
+            entityName: combo.title,
+            before: pickActivitySnapshot(combo.toObject(), COMBO_AUDIT_FIELDS),
+        });
 
         res.status(200).json({
             success: true,

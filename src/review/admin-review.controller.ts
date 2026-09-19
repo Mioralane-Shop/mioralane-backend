@@ -1,6 +1,7 @@
 import { Response } from 'express';
 import { AuthenticatedRequest } from '../middleware/auth.middleware';
 import { getAdminReview, listAdminReviews, moderateReview } from './review.service';
+import { recordActivity } from '../activity-log/activity-log.service';
 
 const respondWithError = (
     res: Response,
@@ -50,7 +51,19 @@ export const updateAdminReviewStatus = async (
     res: Response
 ): Promise<void> => {
     try {
+        const existing = await getAdminReview(req.params.id);
         const review = await moderateReview(req.params.id, (req.body ?? {}).status);
+
+        await recordActivity(req, {
+            action: 'STATUS_CHANGE',
+            entityType: 'REVIEW',
+            entityId: String(req.params.id),
+            entityName: (existing as { product?: { title?: string } } | null)?.product?.title,
+            description: `Changed review status from ${(existing as { status?: string } | null)?.status ?? 'unknown'} to ${(req.body ?? {}).status ?? 'unknown'}`,
+            before: { status: (existing as { status?: string } | null)?.status ?? null },
+            after: { status: (req.body ?? {}).status ?? null },
+        });
+
         res.status(200).json({ success: true, review });
     } catch (error) {
         respondWithError(res, error, 'Unable to update review status', 'admin_review_update_failed');
