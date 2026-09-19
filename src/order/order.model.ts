@@ -366,6 +366,10 @@ const OrderSchema = new Schema<IOrderDocument>(
         const r = ret as unknown as Record<string, unknown> & {
           _id?: { toString: () => string };
           user?: { toString: () => string };
+          shippingAddress?: Record<string, unknown> & {
+            address?: string;
+            fullAddress?: string;
+          };
           items?: Array<
             Record<string, unknown> & {
               product?: { toString: () => string } | null;
@@ -383,6 +387,13 @@ const OrderSchema = new Schema<IOrderDocument>(
 
         if (r.user) {
           r.userId = r.user.toString();
+        }
+
+        // Read-only alias: the order keeps a frozen snapshot of the delivery
+        // address under `address`; expose it as `fullAddress` too so saved
+        // address book entries and order snapshots share one field name.
+        if (r.shippingAddress && r.shippingAddress.address !== undefined) {
+          r.shippingAddress.fullAddress = r.shippingAddress.address;
         }
 
         if (Array.isArray(r.items)) {

@@ -12,6 +12,7 @@ import adminDashboardRoutes from './dashboard/admin-dashboard.routes';
 import mediaRoutes from './media/media.routes';
 import imageKitRoutes from './imagekit/imagekit.module';
 import wishlistRoutes from './wishlist/wishlist.routes';
+import addressRoutes from './address/address.routes';
 import {
   adminCampaignRoutes,
   adminCouponRoutes,
@@ -130,6 +131,9 @@ const createApp = (): express.Application => {
 
   // Wishlist routes (authenticated user flow)
   app.use('/api/wishlist', wishlistRoutes);
+
+  // Saved delivery addresses (authenticated user flow)
+  app.use('/api/addresses', addressRoutes);
 
   // Reviews (public product reviews + authenticated customer submission/history)
   app.use('/api/reviews', reviewRoutes);

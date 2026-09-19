@@ -21,6 +21,7 @@ export type ShippingAddressInput = {
   thana?: string;
   address?: string;
   detailedAddress?: string;
+  fullAddress?: string;
   landmark?: string;
   deliveryZone?: DeliveryZone;
 };
@@ -151,7 +152,9 @@ export const validateAndNormalizeShippingAddress = (
   const division = normalizeRequiredField(input?.division);
   const district = normalizeRequiredField(input?.district);
   const area = normalizeRequiredField(input?.area ?? input?.thana);
-  const address = normalizeRequiredField(input?.detailedAddress ?? input?.address);
+  const address = normalizeRequiredField(
+    input?.detailedAddress ?? input?.fullAddress ?? input?.address
+  );
   const landmark = normalizeOptionalField(input?.landmark);
 
   if (!name || !phone || !division || !district || !area || !address) {
@@ -336,19 +339,19 @@ export const createCheckoutQuoteFingerprint = ({
     totals,
     promotion: promotion
       ? {
-          campaignId: promotion.campaignId?.toString?.() ?? null,
-          campaignName: promotion.campaignName ?? null,
-          campaignType: promotion.campaignType ?? null,
-        }
+        campaignId: promotion.campaignId?.toString?.() ?? null,
+        campaignName: promotion.campaignName ?? null,
+        campaignType: promotion.campaignType ?? null,
+      }
       : null,
     coupon: coupon
       ? {
-          couponId: coupon.couponId?.toString?.() ?? null,
-          code: coupon.code ?? null,
-          discountType: coupon.discountType ?? null,
-          discountValue: coupon.discountValue ?? null,
-          discountAmount: coupon.discountAmount ?? null,
-        }
+        couponId: coupon.couponId?.toString?.() ?? null,
+        code: coupon.code ?? null,
+        discountType: coupon.discountType ?? null,
+        discountValue: coupon.discountValue ?? null,
+        discountAmount: coupon.discountAmount ?? null,
+      }
       : null,
   };
 

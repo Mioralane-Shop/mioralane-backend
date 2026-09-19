@@ -19,6 +19,7 @@ import {
   resolveShipping,
   validateAndNormalizeShippingAddress,
 } from '../shipping/shipping.service';
+import { resolveSavedAddressForCheckout } from '../address/address.service';
 
 type OrderPayloadItem = {
   itemId?: string;
@@ -40,8 +41,12 @@ type CreateOrderBody = {
     area?: string;
     address?: string;
     detailedAddress?: string;
+    fullAddress?: string;
     landmark?: string;
+    addressId?: string;
   };
+  /** Saved address book entry selected at checkout. */
+  addressId?: string;
   paymentMethod?: PaymentMethod;
   couponCode?: string;
   quoteFingerprint?: string;
@@ -86,9 +91,29 @@ export const createOrder = async (req: AuthenticatedRequest, res: Response): Pro
     return;
   }
 
+  // When checkout sends a saved address id, every shipping field is read back
+  // from the customer's own address book — client values are ignored so a
+  // foreign address id can never be used to ship an order.
+  const savedAddressId = (body?.addressId ?? shippingAddress?.addressId ?? '').trim();
+  let shippingAddressInput = shippingAddress;
+
+  if (savedAddressId) {
+    try {
+      shippingAddressInput = await resolveSavedAddressForCheckout(userId, savedAddressId);
+    } catch (error) {
+      const err = error as HttpError;
+      res.status(err.statusCode ?? 400).json({
+        success: false,
+        message: err.message ?? 'Saved delivery address could not be used',
+        code: err.code ?? 'invalid_address_id',
+      });
+      return;
+    }
+  }
+
   let normalizedShippingAddress;
   try {
-    normalizedShippingAddress = validateAndNormalizeShippingAddress(shippingAddress);
+    normalizedShippingAddress = validateAndNormalizeShippingAddress(shippingAddressInput);
   } catch (error) {
     const err = error as HttpError;
     res.status(400).json({
@@ -148,13 +173,13 @@ export const createOrder = async (req: AuthenticatedRequest, res: Response): Pro
         const sourceDoc =
           item.itemType === 'combo'
             ? await Combo.findById(item.itemId)
-                .session(session)
-                .select('_id title price images stock category')
-                .exec()
+              .session(session)
+              .select('_id title price images stock category')
+              .exec()
             : await Product.findById(item.itemId)
-                .session(session)
-                .select('_id title price salePrice images stock category availabilityMode preOrder')
-                .exec();
+              .session(session)
+              .select('_id title price salePrice images stock category availabilityMode preOrder')
+              .exec();
 
         if (!sourceDoc) {
           throw createHttpError(
@@ -212,10 +237,10 @@ export const createOrder = async (req: AuthenticatedRequest, res: Response): Pro
           fulfillmentType: isPreOrderProduct ? 'pre_order' : 'regular',
           preOrderSnapshot: isPreOrderProduct
             ? {
-                expectedArrivalDate: preOrder.expectedArrivalDate,
-                customerMessage: preOrder.customerMessage,
-                quantityLimit: preOrderLimit,
-              }
+              expectedArrivalDate: preOrder.expectedArrivalDate,
+              customerMessage: preOrder.customerMessage,
+              quantityLimit: preOrderLimit,
+            }
             : undefined,
         });
       }
@@ -235,12 +260,12 @@ export const createOrder = async (req: AuthenticatedRequest, res: Response): Pro
       const couponCode = typeof body?.couponCode === 'string' ? body.couponCode.trim() : '';
       const couponPromotion = couponCode
         ? await validateCouponForOrder({
-            couponCode,
-            userId,
-            items: discountItems,
-            itemsTotal,
-            session,
-          })
+          couponCode,
+          userId,
+          items: discountItems,
+          itemsTotal,
+          session,
+        })
         : undefined;
       const baseShipping = await resolveShipping({
         address: normalizedShippingAddress,
@@ -332,15 +357,15 @@ export const createOrder = async (req: AuthenticatedRequest, res: Response): Pro
         const updated =
           item.itemType === 'combo'
             ? await Combo.findOneAndUpdate(
-                { _id: item.sourceId, stock: { $gte: item.quantity } },
-                { $inc: { stock: -item.quantity } },
-                { new: true, session }
-              ).exec()
+              { _id: item.sourceId, stock: { $gte: item.quantity } },
+              { $inc: { stock: -item.quantity } },
+              { new: true, session }
+            ).exec()
             : await Product.findOneAndUpdate(
-                { _id: item.sourceId, stock: { $gte: item.quantity } },
-                { $inc: { stock: -item.quantity } },
-                { new: true, session }
-              ).exec();
+              { _id: item.sourceId, stock: { $gte: item.quantity } },
+              { $inc: { stock: -item.quantity } },
+              { new: true, session }
+            ).exec();
 
         if (!updated) {
           throw createHttpError(409, 'One or more items are out of stock');
@@ -505,9 +530,9 @@ export const getOrderById = async (req: AuthenticatedRequest, res: Response): Pr
     role === 'admin'
       ? { _id: orderId }
       : {
-          _id: orderId,
-          user: userId,
-        }
+        _id: orderId,
+        user: userId,
+      }
   );
 
   if (!order) {
