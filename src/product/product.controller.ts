@@ -492,7 +492,7 @@ export const createProduct = async (req: Request, res: Response): Promise<void> 
     }
 
     // Validate required fields
-  if (!body.title || !body.brand || !body.category || body.price === undefined || body.price === null) {
+    if (!body.title || !body.brand || !body.category || body.price === undefined || body.price === null) {
       res.status(400).json({
         success: false,
         message: 'Missing required fields: title, brand, category, price',
@@ -751,6 +751,20 @@ export const deleteProduct = async (req: Request, res: Response): Promise<void> 
         message: 'Product not found',
       });
       return;
+    }
+
+    // Remove the deleted product from every other product's cross-sell
+    // recommendations so no stale references remain in the database.
+    try {
+      const deletedProductId = new mongoose.Types.ObjectId(id);
+      await Product.updateMany(
+        { 'crossSellRecommendations.productId': deletedProductId },
+        { $pull: { crossSellRecommendations: { productId: deletedProductId } } }
+      );
+    } catch (cleanupError) {
+      // The product is already deleted; the read path tolerates dangling
+      // references, so log the failure instead of reporting a misleading error.
+      console.error('Failed to clean up cross-sell recommendations after deleting product:', cleanupError);
     }
 
     res.status(200).json({
