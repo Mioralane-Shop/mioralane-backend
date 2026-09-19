@@ -7,6 +7,10 @@ import { Product } from '../product/product.model';
 import { Combo } from '../combo/combo.model';
 import { AuthenticatedRequest } from '../middleware/auth.middleware';
 import { getPaginationParams } from '../utils/pagination';
+import {
+  OrderItemStockLine,
+  recordCancellationRestorations,
+} from '../inventory/inventory-transaction.service';
 
 type AdminOrderUser = {
   id: string;
@@ -36,11 +40,11 @@ type RawOrderUser =
   | string
   | mongoose.Types.ObjectId
   | {
-      _id?: string | mongoose.Types.ObjectId;
-      username?: string;
-      email?: string;
-      role?: 'user' | 'admin';
-    }
+    _id?: string | mongoose.Types.ObjectId;
+    username?: string;
+    email?: string;
+    role?: 'user' | 'admin';
+  }
   | null
   | undefined;
 
@@ -162,7 +166,7 @@ const releasePreOrderReservation = async (
   item: NonNullable<RawOrderRecord['items']>[number],
   session: mongoose.ClientSession,
   options: { returnToSellableStockOnArrived: boolean }
-): Promise<void> => {
+): Promise<'stock' | 'reservation'> => {
   const quantity = item.quantity ?? 0;
 
   if (!item.sourceId || !mongoose.Types.ObjectId.isValid(item.sourceId)) {
@@ -196,7 +200,7 @@ const releasePreOrderReservation = async (
     ).exec();
 
     if (arrivedUpdate) {
-      return;
+      return 'stock';
     }
   }
 
@@ -216,12 +220,14 @@ const releasePreOrderReservation = async (
       `Referenced pre-order product was not found for order item ${item.title ?? item.sourceId}`
     );
   }
+
+  return 'reservation';
 };
 
 const restoreCancelledOrderItemStock = async (
   item: NonNullable<RawOrderRecord['items']>[number],
   session: mongoose.ClientSession
-): Promise<void> => {
+): Promise<OrderItemStockLine | null> => {
   if (item.itemType !== 'product' && item.itemType !== 'combo') {
     throw createHttpError(400, `Order item ${item.title ?? 'unknown item'} has an invalid itemType`);
   }
@@ -243,22 +249,29 @@ const restoreCancelledOrderItemStock = async (
   }
 
   if (item.itemType === 'product' && item.fulfillmentType === 'pre_order') {
-    await releasePreOrderReservation(item, session, { returnToSellableStockOnArrived: true });
-    return;
+    const released = await releasePreOrderReservation(item, session, {
+      returnToSellableStockOnArrived: true,
+    });
+
+    // A pre-order that already arrived returns to sellable stock; a pure
+    // reservation release does not move `stock`, so it is not a ledger entry.
+    return released === 'stock'
+      ? { itemType: 'product', itemId: item.sourceId, quantity }
+      : null;
   }
 
   const updatedItem =
     item.itemType === 'combo'
       ? await Combo.findByIdAndUpdate(
-          item.sourceId,
-          { $inc: { stock: quantity } },
-          { new: true, session }
-        ).exec()
+        item.sourceId,
+        { $inc: { stock: quantity } },
+        { new: true, session }
+      ).exec()
       : await Product.findByIdAndUpdate(
-          item.sourceId,
-          { $inc: { stock: quantity } },
-          { new: true, session }
-        ).exec();
+        item.sourceId,
+        { $inc: { stock: quantity } },
+        { new: true, session }
+      ).exec();
 
   if (!updatedItem) {
     throw createHttpError(
@@ -266,6 +279,8 @@ const restoreCancelledOrderItemStock = async (
       `Referenced ${item.itemType} was not found for cancelled order item ${item.title ?? item.sourceId}`
     );
   }
+
+  return { itemType: item.itemType, itemId: item.sourceId, quantity };
 };
 
 const formatOrderUser = (user: RawOrderUser): AdminOrderUser | undefined => {
@@ -348,14 +363,14 @@ const formatOrder = (order: RawOrderRecord): AdminOrderSummary | AdminOrderDetai
     },
     shipping: order.shipping?.zone
       ? {
-          zone: order.shipping.zone,
-          baseCharge: order.shipping.baseCharge ?? order.shippingFee ?? 0,
-          finalCharge: order.shipping.finalCharge ?? order.shippingFee ?? 0,
-          isFreeDelivery: Boolean(order.shipping.isFreeDelivery),
-          freeDeliveryReason: order.shipping.freeDeliveryReason,
-          estimatedMinDays: order.shipping.estimatedMinDays ?? 0,
-          estimatedMaxDays: order.shipping.estimatedMaxDays ?? 0,
-        }
+        zone: order.shipping.zone,
+        baseCharge: order.shipping.baseCharge ?? order.shippingFee ?? 0,
+        finalCharge: order.shipping.finalCharge ?? order.shippingFee ?? 0,
+        isFreeDelivery: Boolean(order.shipping.isFreeDelivery),
+        freeDeliveryReason: order.shipping.freeDeliveryReason,
+        estimatedMinDays: order.shipping.estimatedMinDays ?? 0,
+        estimatedMaxDays: order.shipping.estimatedMaxDays ?? 0,
+      }
       : undefined,
     itemsTotal: order.itemsTotal ?? 0,
     shippingFee: order.shippingFee ?? 0,
@@ -490,11 +505,11 @@ export const getAdminOrderById = async (
     ...order,
     user: customer
       ? {
-          _id: customer._id,
-          username: customer.username,
-          email: customer.email,
-          role: customer.role,
-        }
+        _id: customer._id,
+        username: customer.username,
+        email: customer.email,
+        role: customer.role,
+      }
       : order.user,
   }) as AdminOrderDetail;
 
@@ -572,14 +587,33 @@ export const updateAdminOrderStatus = async (
       }
 
       if (nextStatus === OrderStatus.CANCELLED) {
+        const restoredStockLines: OrderItemStockLine[] = [];
+
         for (const item of order.items) {
           if (item.fulfillmentType === 'pre_order' && order.preOrderReservationsReleased) {
             continue;
           }
-          await restoreCancelledOrderItemStock(item as NonNullable<RawOrderRecord['items']>[number], session);
+          const restored = await restoreCancelledOrderItemStock(item as NonNullable<RawOrderRecord['items']>[number], session);
+
+          if (restored) {
+            restoredStockLines.push(restored);
+          }
         }
+
         if (order.containsPreOrder) {
           order.preOrderReservationsReleased = true;
+        }
+
+        // One restoration per order + item: the ledger's unique index makes a
+        // repeated cancellation a no-op instead of a second stock increase.
+        if (restoredStockLines.length > 0) {
+          await recordCancellationRestorations(
+            orderId,
+            req.user.id,
+            'admin',
+            restoredStockLines,
+            session
+          );
         }
       }
 
@@ -614,11 +648,11 @@ export const updateAdminOrderStatus = async (
         ...updatedOrder,
         user: customer
           ? {
-              _id: customer._id,
-              username: customer.username,
-              email: customer.email,
-              role: customer.role,
-            }
+            _id: customer._id,
+            username: customer.username,
+            email: customer.email,
+            role: customer.role,
+          }
           : updatedOrder.user,
       }),
     });

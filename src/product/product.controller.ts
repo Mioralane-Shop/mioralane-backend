@@ -6,6 +6,7 @@ import mongoose from 'mongoose';
 import { extractMediaUrls, normalizeMediaAssets } from '../media/media.utils';
 import type { MediaAsset } from '../media/media.types';
 import { normalizeOptionalLowStockThreshold } from '../inventory/inventory.service';
+import { applyCatalogStockChange } from '../inventory/inventory-transaction.service';
 import {
   getCartCrossSellRecommendations,
   normalizeCrossSellRecommendations,
@@ -653,20 +654,76 @@ export const updateProduct = async (req: Request, res: Response): Promise<void> 
       body.preOrder.reservedQuantity = product.preOrder?.reservedQuantity ?? 0;
     }
 
-    product.set({
-      ...body,
-      slug: nextSlug,
-    });
+    const requestedStock = typeof body.stock === 'number' ? body.stock : undefined;
 
-    await product.save();
-    await product.populate({
+    // Stock is never written directly: every change goes through the inventory
+    // ledger so the audit trail cannot be bypassed by a catalog edit.
+    delete body.stock;
+
+    const stockChange =
+      requestedStock !== undefined && requestedStock !== product.stock
+        ? { previousStock: product.stock ?? 0, nextStock: requestedStock }
+        : null;
+
+    if (stockChange) {
+      const session = await mongoose.startSession();
+
+      try {
+        await session.withTransaction(async () => {
+          const editable = await Product.findById(id).session(session).exec();
+
+          if (!editable) {
+            throw Object.assign(new Error('Product not found'), { statusCode: 404 });
+          }
+
+          editable.set({
+            ...body,
+            slug: nextSlug,
+          });
+
+          await editable.save({ session });
+
+          await applyCatalogStockChange({
+            itemType: 'product',
+            itemId: id,
+            previousStock: stockChange.previousStock,
+            nextStock: stockChange.nextStock,
+            performedBy: req.user?.id,
+            performedByRole: 'admin',
+            reason: 'Stock updated from the product editor',
+            session,
+          });
+        });
+      } finally {
+        await session.endSession();
+      }
+    } else {
+      product.set({
+        ...body,
+        slug: nextSlug,
+      });
+
+      await product.save();
+    }
+
+    const updatedProduct = await Product.findById(id);
+
+    if (!updatedProduct) {
+      res.status(404).json({
+        success: false,
+        message: 'Product not found',
+      });
+      return;
+    }
+
+    await updatedProduct.populate({
       path: 'crossSellRecommendations.productId',
       select: 'title name images media',
     });
 
     res.status(200).json({
       success: true,
-      product,
+      product: updatedProduct,
     });
   } catch (error: any) {
     if (error?.statusCode) {
@@ -823,6 +880,8 @@ export const markPreOrderArrived = async (req: Request, res: Response): Promise<
         );
       }
 
+      const previousStock = current.stock ?? 0;
+
       current.stock = actualReceivedQuantity - reservedQuantity;
       current.availabilityMode = 'in_stock';
       current.preOrder = {
@@ -832,6 +891,19 @@ export const markPreOrderArrived = async (req: Request, res: Response): Promise<
       };
 
       await current.save({ session });
+
+      await applyCatalogStockChange({
+        itemType: 'product',
+        itemId: id,
+        previousStock,
+        nextStock: current.stock,
+        transactionType: 'RESTOCK',
+        reason: 'Pre-order stock arrived',
+        performedBy: req.user?.id,
+        performedByRole: 'admin',
+        session,
+      });
+
       return current;
     });
 

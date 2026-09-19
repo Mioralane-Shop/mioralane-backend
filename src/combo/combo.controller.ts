@@ -5,6 +5,7 @@ import { slugify } from '../utils/slugify';
 import mongoose from 'mongoose';
 import { extractMediaUrls, normalizeMediaAssets } from '../media/media.utils';
 import type { MediaAsset } from '../media/media.types';
+import { applyCatalogStockChange } from '../inventory/inventory-transaction.service';
 
 // ─── Types ────────────────────────────────────────────────────────────────
 
@@ -461,13 +462,43 @@ export const updateCombo = async (req: Request, res: Response): Promise<void> =>
             return;
         }
 
+        const requestedStock = typeof sanitized.stock === 'number' ? sanitized.stock : undefined;
+        const previousStock = combo.stock ?? 0;
+
+        // Stock is never written directly: every change goes through the
+        // inventory ledger so the audit trail cannot be bypassed here.
+        delete sanitized.stock;
+
         combo.set(sanitized);
 
         const compareAtPrice = typeof combo.compareAtPrice === 'number' ? combo.compareAtPrice : 0;
         const price = typeof combo.price === 'number' ? combo.price : 0;
         combo.savings = compareAtPrice > price ? compareAtPrice - price : 0;
 
-        await combo.save();
+        if (requestedStock === undefined || requestedStock === previousStock) {
+            await combo.save();
+        } else {
+            const session = await mongoose.startSession();
+
+            try {
+                await session.withTransaction(async () => {
+                    await combo.save({ session });
+
+                    await applyCatalogStockChange({
+                        itemType: 'combo',
+                        itemId: id,
+                        previousStock,
+                        nextStock: requestedStock,
+                        performedBy: req.user?.id,
+                        performedByRole: 'admin',
+                        reason: 'Stock updated from the combo editor',
+                        session,
+                    });
+                });
+            } finally {
+                await session.endSession();
+            }
+        }
 
         res.status(200).json({ success: true, combo });
     } catch (error: any) {

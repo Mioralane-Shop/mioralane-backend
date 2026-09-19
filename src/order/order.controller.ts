@@ -20,6 +20,7 @@ import {
   validateAndNormalizeShippingAddress,
 } from '../shipping/shipping.service';
 import { resolveSavedAddressForCheckout } from '../address/address.service';
+import { recordOrderStockDeductions } from '../inventory/inventory-transaction.service';
 
 type OrderPayloadItem = {
   itemId?: string;
@@ -329,6 +330,14 @@ export const createOrder = async (req: AuthenticatedRequest, res: Response): Pro
         );
       }
 
+      // Stock actually removed by this checkout — ledgered in the same
+      // transaction once the order exists.
+      const deductedStockLines: Array<{
+        itemType: OrderItemType;
+        itemId: string;
+        quantity: number;
+      }> = [];
+
       for (const item of resolvedItems) {
         if (item.fulfillmentType === 'pre_order') {
           const updated = await Product.findOneAndUpdate(
@@ -370,6 +379,12 @@ export const createOrder = async (req: AuthenticatedRequest, res: Response): Pro
         if (!updated) {
           throw createHttpError(409, 'One or more items are out of stock');
         }
+
+        deductedStockLines.push({
+          itemType: item.itemType,
+          itemId: item.itemId as string,
+          quantity: item.quantity,
+        });
       }
 
       const preOrderDates = resolvedItems
@@ -429,6 +444,13 @@ export const createOrder = async (req: AuthenticatedRequest, res: Response): Pro
           },
         ],
         { session }
+      );
+
+      await recordOrderStockDeductions(
+        order._id.toString(),
+        userId,
+        deductedStockLines,
+        session
       );
 
       if (selectedPromotion.coupon) {
