@@ -22,6 +22,10 @@ import { adminShippingSettingsRoutes, shippingRoutes } from './shipping/shipping
 import { adminInventorySettingsRoutes, adminInventoryRoutes } from './inventory/inventory.routes';
 import { activityLogRoutes } from './activity-log/activity-log.routes';
 import { adminCrossSellSettingsRoutes } from './cross-sell/cross-sell.routes';
+import {
+  adminAnnouncementRoutes,
+  announcementPublicRoutes,
+} from './announcement/announcement.routes';
 import reviewRoutes from './review/review.routes';
 import adminReviewRoutes from './review/admin-review.routes';
 import { authLimiter } from './middleware/rateLimiter.middleware';
@@ -134,6 +138,10 @@ const createApp = (): express.Application => {
   // Audit trail (admin-only)
   app.use('/api/activity-logs', activityLogRoutes);
   app.use('/api/promotions', promotionPublicRoutes);
+
+  // Storefront announcement bar (top ticker) — managed from its own admin menu
+  app.use('/api/admin/announcement', adminAnnouncementRoutes);
+  app.use('/api/announcements', announcementPublicRoutes);
   app.use('/api/shipping', shippingRoutes);
 
   // Wishlist routes (authenticated user flow)

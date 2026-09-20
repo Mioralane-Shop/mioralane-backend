@@ -42,10 +42,10 @@ export const getActivePromotion = async (_req: Request, res: Response): Promise<
         ctaUrl: campaign.popup.ctaUrl,
         coupon: coupon
           ? {
-              code: coupon.code,
-              discountType: coupon.discountType,
-              discountValue: coupon.discountValue,
-            }
+            code: coupon.code,
+            discountType: coupon.discountType,
+            discountValue: coupon.discountValue,
+          }
           : null,
       },
       discount:
