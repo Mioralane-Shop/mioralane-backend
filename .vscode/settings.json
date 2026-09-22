@@ -1,5 +1,7 @@
 {
   "editor.formatOnSave": false,
   "[typescript]": { "editor.defaultFormatter": null },
-  "[typescriptreact]": { "editor.defaultFormatter": null }
+  "[typescriptreact]": { "editor.defaultFormatter": null },
+  "[json]": { "editor.defaultFormatter": null },
+  "[jsonc]": { "editor.defaultFormatter": null }
 }
