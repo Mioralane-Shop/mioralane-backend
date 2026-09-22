@@ -1,5 +1,5 @@
 import { Router, RequestHandler } from 'express';
-import { adminOnly, protect } from '../middleware/auth.middleware';
+import { adminGuard } from '../middleware/auth.middleware';
 import {
     getActivityActors,
     getAdminActivity,
@@ -15,12 +15,13 @@ import {
  */
 export const activityLogRoutes = Router();
 
-const guard = [protect as RequestHandler, adminOnly as RequestHandler];
+// Every route on this router is admin-only.
+activityLogRoutes.use(...adminGuard);
 
-activityLogRoutes.get('/actors', ...guard, getActivityActors as RequestHandler);
+activityLogRoutes.get('/actors', getActivityActors as RequestHandler);
 
-activityLogRoutes.get('/admin', ...guard, listAdminActivity as RequestHandler);
-activityLogRoutes.get('/admin/:id', ...guard, getAdminActivity as RequestHandler);
+activityLogRoutes.get('/admin', listAdminActivity as RequestHandler);
+activityLogRoutes.get('/admin/:id', getAdminActivity as RequestHandler);
 
-activityLogRoutes.get('/participants', ...guard, listParticipantActivity as RequestHandler);
-activityLogRoutes.get('/participants/:id', ...guard, getParticipantActivity as RequestHandler);
+activityLogRoutes.get('/participants', listParticipantActivity as RequestHandler);
+activityLogRoutes.get('/participants/:id', getParticipantActivity as RequestHandler);

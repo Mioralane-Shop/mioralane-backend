@@ -1,5 +1,5 @@
 import { Router, RequestHandler } from 'express';
-import { adminOnly, protect } from '../middleware/auth.middleware';
+import { adminGuard } from '../middleware/auth.middleware';
 import {
   getAdminCrossSellSettings,
   updateAdminCrossSellSettings,
@@ -7,16 +7,8 @@ import {
 
 export const adminCrossSellSettingsRoutes = Router();
 
-adminCrossSellSettingsRoutes.get(
-  '/cross-sell',
-  protect as RequestHandler,
-  adminOnly as RequestHandler,
-  getAdminCrossSellSettings as RequestHandler
-);
+// Every route on this router is admin-only.
+adminCrossSellSettingsRoutes.use(...adminGuard);
 
-adminCrossSellSettingsRoutes.put(
-  '/cross-sell',
-  protect as RequestHandler,
-  adminOnly as RequestHandler,
-  updateAdminCrossSellSettings as RequestHandler
-);
+adminCrossSellSettingsRoutes.get('/cross-sell', getAdminCrossSellSettings as RequestHandler);
+adminCrossSellSettingsRoutes.put('/cross-sell', updateAdminCrossSellSettings as RequestHandler);

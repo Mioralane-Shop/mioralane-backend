@@ -1,5 +1,5 @@
 import { Router, RequestHandler } from 'express';
-import { adminOnly, protect } from '../middleware/auth.middleware';
+import { adminGuard } from '../middleware/auth.middleware';
 import {
     getAdminReviewDetail,
     getAdminReviewList,
@@ -8,18 +8,11 @@ import {
 
 const router = Router();
 
-router.get('/', protect as RequestHandler, adminOnly as RequestHandler, getAdminReviewList as RequestHandler);
-router.get(
-    '/:id',
-    protect as RequestHandler,
-    adminOnly as RequestHandler,
-    getAdminReviewDetail as RequestHandler
-);
-router.patch(
-    '/:id/status',
-    protect as RequestHandler,
-    adminOnly as RequestHandler,
-    updateAdminReviewStatus as RequestHandler
-);
+// Every route on this router is admin-only.
+router.use(...adminGuard);
+
+router.get('/', getAdminReviewList as RequestHandler);
+router.get('/:id', getAdminReviewDetail as RequestHandler);
+router.patch('/:id/status', updateAdminReviewStatus as RequestHandler);
 
 export default router;

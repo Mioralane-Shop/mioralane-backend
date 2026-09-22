@@ -10,6 +10,7 @@
     "start:dev": "ts-node src/main.ts",
     "start:prod": "node -r tsconfig-paths/register dist/main",
     "dev": "tsx watch src/main.ts",
+    "verify:route-guards": "tsx tests/verify-admin-route-guards.ts",
     "seed:combos": "tsx src/scripts/seed-combos.ts",
     "migrate:wishlist": "tsx src/scripts/migrate-user-wishlist.ts",
     "migrate:wishlist-items": "tsx src/scripts/migrate-wishlist-items.ts"

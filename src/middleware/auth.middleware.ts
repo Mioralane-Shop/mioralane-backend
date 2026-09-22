@@ -1,4 +1,4 @@
-import { Request, Response, NextFunction } from 'express';
+import { Request, Response, NextFunction, RequestHandler } from 'express';
 import jwt from 'jsonwebtoken';
 import mongoose from 'mongoose';
 import { UserModel } from '../auth/user.model';
@@ -166,3 +166,23 @@ export const adminOnly = (
 
   next();
 };
+
+/**
+ * Shared guard chain for admin-only routes.
+ *
+ * Defined once so every admin surface composes the same two middlewares in the
+ * same order: `protect` authenticates (and loads the live role from MongoDB),
+ * then `adminOnly` authorises. Routers that mix public and admin endpoints must
+ * apply it per route, because a router-level `use` would lock out the public
+ * handlers.
+ *
+ * The `RequestHandler` casts are type-level only — they are erased at compile
+ * time, so Express still receives the original function references (verified by
+ * `tests/verify-admin-route-guards.ts`). That matters because Express 5 detects
+ * a handler's returned promise and forwards rejections to `next`, which only
+ * works while the handler itself is passed through unchanged.
+ */
+export const adminGuard: RequestHandler[] = [
+  protect as RequestHandler,
+  adminOnly as RequestHandler,
+];

@@ -1,5 +1,5 @@
 import { Router, RequestHandler } from 'express';
-import { protect, adminOnly } from '../middleware/auth.middleware';
+import { adminGuard } from '../middleware/auth.middleware';
 import {
   createProduct,
   deleteProduct,
@@ -17,33 +17,14 @@ router.get('/', getProducts as RequestHandler);
 router.post('/recommendations/cart', getCartRecommendations as RequestHandler);
 router.get('/:idOrSlug', getProductByIdOrSlug as RequestHandler);
 
-// Admin-only routes
-router.post(
-  '/',
-  protect as RequestHandler,
-  adminOnly as RequestHandler,
-  createProduct as RequestHandler
-);
+// Admin-only routes. This router also serves public GETs, so the guard is
+// applied per route — a router-level `use` would lock out the storefront.
+router.post('/', ...adminGuard, createProduct as RequestHandler);
 
-router.put(
-  '/:id',
-  protect as RequestHandler,
-  adminOnly as RequestHandler,
-  updateProduct as RequestHandler
-);
+router.put('/:id', ...adminGuard, updateProduct as RequestHandler);
 
-router.patch(
-  '/:id/pre-order/arrive',
-  protect as RequestHandler,
-  adminOnly as RequestHandler,
-  markPreOrderArrived as RequestHandler
-);
+router.patch('/:id/pre-order/arrive', ...adminGuard, markPreOrderArrived as RequestHandler);
 
-router.delete(
-  '/:id',
-  protect as RequestHandler,
-  adminOnly as RequestHandler,
-  deleteProduct as RequestHandler
-);
+router.delete('/:id', ...adminGuard, deleteProduct as RequestHandler);
 
 export default router;

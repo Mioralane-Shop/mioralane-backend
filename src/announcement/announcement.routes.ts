@@ -1,5 +1,5 @@
 import { Router, RequestHandler } from 'express';
-import { adminOnly, protect } from '../middleware/auth.middleware';
+import { adminGuard } from '../middleware/auth.middleware';
 import {
     getAdminAnnouncementBar,
     getPublicAnnouncementBar,
@@ -12,16 +12,9 @@ export const adminAnnouncementRoutes = Router();
 // Public: consumed by the storefront top bar
 announcementPublicRoutes.get('/', getPublicAnnouncementBar as RequestHandler);
 
-// Admin: the single place the announcement bar is managed from
-adminAnnouncementRoutes.get(
-    '/',
-    protect as RequestHandler,
-    adminOnly as RequestHandler,
-    getAdminAnnouncementBar as RequestHandler
-);
-adminAnnouncementRoutes.put(
-    '/',
-    protect as RequestHandler,
-    adminOnly as RequestHandler,
-    updateAdminAnnouncementBar as RequestHandler
-);
+// Admin: the single place the announcement bar is managed from.
+// Every route on this router is admin-only.
+adminAnnouncementRoutes.use(...adminGuard);
+
+adminAnnouncementRoutes.get('/', getAdminAnnouncementBar as RequestHandler);
+adminAnnouncementRoutes.put('/', updateAdminAnnouncementBar as RequestHandler);

@@ -1,6 +1,6 @@
 import { NextFunction, Request, RequestHandler, Response, Router } from 'express';
 import multer from 'multer';
-import { adminOnly, protect } from '../middleware/auth.middleware';
+import { adminGuard } from '../middleware/auth.middleware';
 import { ImageKitService } from '../imagekit/imagekit.service';
 import { MediaController } from './media.controller';
 
@@ -60,10 +60,13 @@ const handleSingleUpload: RequestHandler = (req, res, next) => {
 
 const router = Router();
 
+// Scoped to the admin image endpoints only. A router-level `use` without a path
+// would also guard the customer-facing `/review-images` route below (currently
+// disabled) once it is restored.
+router.use('/images', ...adminGuard);
+
 router.post(
   '/images',
-  protect as RequestHandler,
-  adminOnly as RequestHandler,
   handleSingleUpload,
   (req: Request, res: Response, next: NextFunction) => {
     void mediaController.uploadImage(req, res).catch(next);
@@ -72,14 +75,14 @@ router.post(
 
 router.delete(
   '/images/:fileId',
-  protect as RequestHandler,
-  adminOnly as RequestHandler,
   (req: Request, res: Response, next: NextFunction) => {
     void mediaController.deleteImage(req, res).catch(next);
   }
 );
 
 // Review images are temporarily disabled — restore this route to re-enable review image uploads.
+// NOTE: re-import `protect` from '../middleware/auth.middleware' when restoring this route;
+// it is intentionally not imported while the route is disabled.
 // // Review images are uploaded by authenticated customers. The asset type is
 // // forced to "review" server-side; admin image routes stay admin-only.
 // router.post(

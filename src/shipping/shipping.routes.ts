@@ -1,5 +1,5 @@
 import { Router, RequestHandler } from 'express';
-import { adminOnly, protect } from '../middleware/auth.middleware';
+import { adminGuard, protect } from '../middleware/auth.middleware';
 import {
   getAdminShippingSettings,
   quoteShipping,
@@ -11,6 +11,9 @@ export const adminShippingSettingsRoutes = Router();
 
 shippingRoutes.post('/quote', protect as RequestHandler, quoteShipping as RequestHandler);
 
-adminShippingSettingsRoutes.get('/shipping', protect as RequestHandler, adminOnly as RequestHandler, getAdminShippingSettings as RequestHandler);
-adminShippingSettingsRoutes.put('/shipping', protect as RequestHandler, adminOnly as RequestHandler, updateAdminShippingSettings as RequestHandler);
+// Every route on this router is admin-only.
+adminShippingSettingsRoutes.use(...adminGuard);
+
+adminShippingSettingsRoutes.get('/shipping', getAdminShippingSettings as RequestHandler);
+adminShippingSettingsRoutes.put('/shipping', updateAdminShippingSettings as RequestHandler);
 
