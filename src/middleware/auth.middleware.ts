@@ -1,5 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
+import mongoose from 'mongoose';
+import { UserModel } from '../auth/user.model';
 
 export type UserRole = 'user' | 'admin';
 
@@ -14,12 +16,44 @@ export interface AuthenticatedRequest extends Request {
   };
 }
 
+/** Token validation contract, shared by `jwt.sign` (auth controller) and `jwt.verify`. */
+export const JWT_ALGORITHM = 'HS256' as const;
+export const JWT_ISSUER = 'mioralane-api';
+export const JWT_AUDIENCE = 'mioralane-clients';
+
 const JWT_SECRET = process.env.JWT_SECRET;
 
 interface JwtPayload {
   id: string;
   role: UserRole;
 }
+
+export const isUserRole = (value: unknown): value is UserRole =>
+  value === 'user' || value === 'admin';
+
+/**
+ * Loads the live account behind a token id.
+ *
+ * Returns null when the id is malformed, the account no longer exists, or its
+ * stored role is not a recognised value. The DB round-trip on every request is
+ * a deliberate trade-off: it makes role demotion and account deletion take
+ * effect immediately, instead of leaving a demoted admin with full access
+ * until the token expires. There is intentionally no cache — a TTL cache would
+ * reintroduce exactly that stale-role window.
+ */
+const loadLiveAccountRole = async (userId: string): Promise<UserRole | null> => {
+  if (!mongoose.Types.ObjectId.isValid(userId)) {
+    return null;
+  }
+
+  const account = await UserModel.findById(userId).select('role').lean().exec();
+
+  if (!account || !isUserRole(account.role)) {
+    return null;
+  }
+
+  return account.role;
+};
 
 /**
  * Middleware that verifies the JWT from the Authorization header or
@@ -29,7 +63,11 @@ interface JwtPayload {
  * 1. `req.cookies.token`  —  httpOnly cookie (XSS-safe, preferred)
  * 2. `Authorization: Bearer <token>`  —  standard header fallback
  */
-export const protect = (req: Request, res: Response, next: NextFunction): void => {
+export const protect = async (
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> => {
   try {
     if (!JWT_SECRET) {
       throw new Error('JWT_SECRET is required for authentication');
@@ -58,11 +96,34 @@ export const protect = (req: Request, res: Response, next: NextFunction): void =
       return;
     }
 
-    const decoded = jwt.verify(token, JWT_SECRET) as JwtPayload;
+    // Algorithm, issuer and audience are pinned. Without them `verify` would
+    // accept any algorithm compatible with the secret, plus tokens minted for
+    // another service that happens to share it.
+    const decoded = jwt.verify(token, JWT_SECRET, {
+      algorithms: [JWT_ALGORITHM],
+      issuer: JWT_ISSUER,
+      audience: JWT_AUDIENCE,
+    }) as JwtPayload;
+
+    if (typeof decoded.id !== 'string') {
+      res.status(401).json({ success: false, message: 'Invalid token' });
+      return;
+    }
+
+    const liveRole = await loadLiveAccountRole(decoded.id);
+
+    if (!liveRole) {
+      res.status(401).json({
+        success: false,
+        message: 'User session is no longer valid',
+      });
+      return;
+    }
 
     req.user = {
       id: decoded.id,
-      role: decoded.role,
+      // The live role from MongoDB, never the claim baked into the token.
+      role: liveRole,
     };
 
     next();

@@ -29,21 +29,16 @@ import {
 import reviewRoutes from './review/review.routes';
 import adminReviewRoutes from './review/admin-review.routes';
 import { authLimiter } from './middleware/rateLimiter.middleware';
+import { csrfOriginGuard } from './middleware/csrf.middleware';
+import { getAllowedOrigins } from './config/allowed-origins';
 import { swaggerSpec, swaggerServe, swaggerSetup } from './swagger';
 
 const createApp = (): express.Application => {
   const app = express();
 
-  // Middlewares — CORS must be first
-  const localOrigins = [
-    'http://localhost:3000',
-    'http://localhost:3001',
-    'http://localhost:3100',
-    'http://127.0.0.1:3000',
-    'http://127.0.0.1:3001',
-    'http://127.0.0.1:3100',
-  ];
-
+  // Middlewares — CORS must be first.
+  // The origin allowlist lives in `config/allowed-origins.ts` so CORS and the
+  // CSRF guard below can never disagree about which origins are trusted.
   app.use(
     cors({
       origin: (origin, callback) => {
@@ -52,13 +47,7 @@ const createApp = (): express.Application => {
           return;
         }
 
-        const allowedOrigins = [
-          'https://mioralane.com',
-          'https://www.mioralane.com',
-          ...localOrigins,
-        ];
-
-        if (allowedOrigins.includes(origin)) {
+        if (getAllowedOrigins().includes(origin)) {
           callback(null, true);
         } else {
           callback(new Error(`CORS origin denied: ${origin}`));
@@ -72,6 +61,10 @@ const createApp = (): express.Application => {
 
   app.use(express.json());
   app.use(cookieParser());
+
+  // Reject cross-site state-changing requests before they reach the DB
+  // middleware or any route handler (see middleware/csrf.middleware.ts).
+  app.use(csrfOriginGuard);
 
   // ── DB middleware: ensure MongoDB is connected before any route handler ──
   // On Vercel serverless, the first "cold start" triggers the connection;
