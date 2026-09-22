@@ -12,6 +12,14 @@
  *     `use(...adminGuard)`. It also fails on a reversed inline order
  *     (`adminOnly` appearing before `protect`).
  *
+ *  A2. Guard coverage for the admin-guarded routers that are mounted OUTSIDE
+ *     `/api/admin` (product, combo, media, activity-log). Check A cannot see
+ *     them. For the routers that also serve public GETs, the public GETs are
+ *     additionally asserted to be UNguarded, because adding a router-level
+ *     guard there would lock the storefront out. The one intentionally public
+ *     non-GET route is declared as an explicit, reasoned exception rather than
+ *     by loosening the rule.
+ *
  *  B. ObjectId canary. Asserts the 25 `:id` guards found during the P0-2 audit
  *     are still present. These live in controllers and services rather than in
  *     route files, so check A cannot see them; this turns that manual audit
@@ -42,6 +50,73 @@ const SRC_DIR = join(__dirname, '..', 'src');
 const APP_MODULE_FILE = join(SRC_DIR, 'app.module.ts');
 
 const readText = (file: string): string => readFileSync(file, 'utf8');
+
+/**
+ * Removes `//` line comments and block comments while preserving quoted string
+ * literals.
+ *
+ * This is required, not cosmetic: without it a guard that was disabled by
+ * COMMENTING IT OUT is still found by the plain-text call scanner and counted
+ * as present. The negative controls caught exactly that false negative.
+ */
+const stripComments = (source: string): string => {
+    let output = '';
+    let index = 0;
+    let quote: string | null = null;
+
+    while (index < source.length) {
+        const char = source[index];
+        const next = source[index + 1];
+
+        if (quote !== null) {
+            output += char;
+
+            if (char === '\\') {
+                output += next ?? '';
+                index += 2;
+                continue;
+            }
+
+            if (char === quote) {
+                quote = null;
+            }
+
+            index += 1;
+            continue;
+        }
+
+        if (char === "'" || char === '"' || char === '`') {
+            quote = char;
+            output += char;
+            index += 1;
+            continue;
+        }
+
+        if (char === '/' && next === '/') {
+            while (index < source.length && source[index] !== '\n') {
+                index += 1;
+            }
+            continue;
+        }
+
+        if (char === '/' && next === '*') {
+            index += 2;
+            while (index < source.length && !(source[index] === '*' && source[index + 1] === '/')) {
+                index += 1;
+            }
+            index += 2;
+            continue;
+        }
+
+        output += char;
+        index += 1;
+    }
+
+    return output;
+};
+
+/** Source with comments removed — used for every structural parse. */
+const readCode = (file: string): string => stripComments(readText(file));
 
 /** Relative-to-src path, used for readable output on any OS. */
 const shortPath = (file: string): string => file.slice(SRC_DIR.length + 1).split('\\').join('/');
@@ -133,6 +208,8 @@ type RegisteredRoute = {
     orderIndex: number;
     inlineProtect: boolean;
     inlineAdminOnly: boolean;
+    /** True when the registration spreads `...adminGuard` inline. */
+    inlineAdminGuard: boolean;
 };
 
 type RouterInfo = {
@@ -159,7 +236,7 @@ const resolveModuleFile = (modulePath: string): string =>
     `${join(SRC_DIR, modulePath.replace(/^\.\//, ''))}.ts`;
 
 const collectImportedRouters = (routers: RouterInfo[]): Map<string, RouterInfo> => {
-    const source = readText(APP_MODULE_FILE);
+    const source = readCode(APP_MODULE_FILE);
     const byLocalName = new Map<string, RouterInfo>();
 
     for (const match of source.matchAll(/import\s*\{([^}]+)\}\s*from\s*'([^']+)'/g)) {
@@ -188,7 +265,7 @@ const collectImportedRouters = (routers: RouterInfo[]): Map<string, RouterInfo> 
             continue;
         }
 
-        const defaultMatch = readText(file).match(/export\s+default\s+([A-Za-z_$][\w$]*)\s*;/);
+        const defaultMatch = readCode(file).match(/export\s+default\s+([A-Za-z_$][\w$]*)\s*;/);
         const router = defaultMatch ? findRouter(routers, file, defaultMatch[1]) : undefined;
 
         if (router) {
@@ -203,7 +280,7 @@ const collectRouters = (): RouterInfo[] => {
     const routers: RouterInfo[] = [];
 
     for (const file of listRouteFiles(SRC_DIR)) {
-        const source = readText(file);
+        const source = readCode(file);
         const idents = new Set<string>();
 
         for (const match of source.matchAll(ROUTER_DEFINITION)) {
@@ -230,6 +307,7 @@ const collectRouters = (): RouterInfo[] => {
                         orderIndex: call.index,
                         inlineProtect: call.args.indexOf('protect') !== -1,
                         inlineAdminOnly: call.args.indexOf('adminOnly') !== -1,
+                        inlineAdminGuard: call.args.indexOf('adminGuard') !== -1,
                     });
                 }
             }
@@ -250,7 +328,7 @@ const collectRouters = (): RouterInfo[] => {
 };
 
 const collectMounts = (): Array<{ path: string; args: string }> => {
-    const source = readText(APP_MODULE_FILE);
+    const source = readCode(APP_MODULE_FILE);
 
     return extractCallArgs(source, 'app.use(')
         .map((call) => {
@@ -261,9 +339,8 @@ const collectMounts = (): Array<{ path: string; args: string }> => {
 };
 
 /** Check A — every route mounted under /api/admin is guarded. */
-const checkAdminGuardCoverage = (): void => {
-    const routes = collectRouters();
-    const importedRouters = collectImportedRouters(routes);
+const checkAdminGuardCoverage = (routers: RouterInfo[]): void => {
+    const importedRouters = collectImportedRouters(routers);
     const mounts = collectMounts();
     const rows: string[] = [];
     let adminRouteCount = 0;
@@ -279,7 +356,8 @@ const checkAdminGuardCoverage = (): void => {
             for (const route of router.routes) {
                 const fullPath = joinPaths(mount.path, route.path);
                 const coveringGuard = router.guards.find((guard) => covers(guard.prefix, route.path));
-                const inline = route.inlineProtect && route.inlineAdminOnly;
+                const inline =
+                    route.inlineAdminGuard || (route.inlineProtect && route.inlineAdminOnly);
                 const source = inline
                     ? 'inline'
                     : coveringGuard !== undefined
@@ -324,6 +402,151 @@ const checkAdminGuardCoverage = (): void => {
     if (adminRouteCount === 0) {
         fail('no /api/admin routes were discovered — the parser is probably broken');
     }
+};
+
+/**
+ * Admin-guarded routers that are deliberately NOT mounted under `/api/admin`.
+ *
+ * `scope` is explicit because the risk differs per router:
+ *  - 'non-get': public GETs must stay open, so only write methods are asserted
+ *    (and the public GETs are asserted to remain unguarded).
+ *  - 'all': an audit surface where even GETs must be admin-only — asserting
+ *    writes only would make the check vacuous, since every route here is a GET.
+ */
+const ADMIN_GUARDED_ROUTERS_OUTSIDE_ADMIN_MOUNT: Array<{
+    file: string;
+    ident: string;
+    scope: 'non-get' | 'all';
+    note: string;
+    /**
+     * Registrations that are intentionally public even though they are not GETs.
+     * Declared explicitly (with a reason) instead of loosening the rule, so any
+     * NEW unguarded write on these routers still fails the check. Stale entries
+     * are themselves a failure.
+     */
+    publicExceptions?: Array<{ method: string; path: string; reason: string }>;
+}> = [
+    {
+        file: 'product/product.routes.ts',
+        ident: 'router',
+        scope: 'non-get',
+        note: 'storefront catalog GETs + admin writes',
+        publicExceptions: [
+            {
+                method: 'POST',
+                path: '/recommendations/cart',
+                reason:
+                    'guest cart cross-sell lookup — a read, so POST is only used to carry productIds in the body',
+            },
+        ],
+    },
+    {
+        file: 'combo/combo.routes.ts',
+        ident: 'router',
+        scope: 'non-get',
+        note: 'storefront combo GETs + admin writes',
+    },
+    {
+        file: 'media/media.routes.ts',
+        ident: 'router',
+        scope: 'non-get',
+        note: 'admin image endpoints (future customer /review-images stays open)',
+    },
+    {
+        file: 'activity-log/activity-log.routes.ts',
+        ident: 'activityLogRoutes',
+        scope: 'all',
+        note: 'audit surface — even GETs are admin-only',
+    },
+];
+
+const isRouteGuarded = (route: RegisteredRoute, router: RouterInfo): boolean =>
+    route.inlineAdminGuard ||
+    (route.inlineProtect && route.inlineAdminOnly) ||
+    router.guards.some((guard) => covers(guard.prefix, route.path));
+
+/** Check A2 — the admin-guarded routers that live outside /api/admin. */
+const checkNonAdminMountedGuardCoverage = (routers: RouterInfo[]): void => {
+    console.log('\n=== A2. Admin-guarded routers outside /api/admin ===');
+    let checked = 0;
+
+    for (const entry of ADMIN_GUARDED_ROUTERS_OUTSIDE_ADMIN_MOUNT) {
+        const file = join(SRC_DIR, entry.file);
+        const router = findRouter(routers, file, entry.ident);
+
+        if (!router) {
+            fail(`declared admin router not found: ${entry.file}::${entry.ident}`);
+            console.log(`  FAIL ${entry.file}::${entry.ident} — router not found`);
+            continue;
+        }
+
+        const exceptions = entry.publicExceptions ?? [];
+        const targets = (
+            entry.scope === 'all'
+                ? router.routes
+                : router.routes.filter((route) => route.method !== 'GET')
+        ).filter(
+            (route) =>
+                !exceptions.some(
+                    (exception) =>
+                        exception.method === route.method && exception.path === route.path,
+                ),
+        );
+
+        for (const exception of exceptions) {
+            const declared = router.routes.find(
+                (route) => route.method === exception.method && route.path === exception.path,
+            );
+
+            if (!declared) {
+                fail(
+                    `stale public exception — route no longer exists: ${exception.method} ${exception.path} (${entry.file})`,
+                );
+            } else if (isRouteGuarded(declared, router)) {
+                fail(
+                    `stale public exception — route is in fact guarded: ${exception.method} ${exception.path} (${entry.file})`,
+                );
+            }
+        }
+
+        if (targets.length === 0) {
+            fail(`declared admin router has no routes to verify: ${entry.file}::${entry.ident}`);
+            console.log(`  FAIL ${entry.file}::${entry.ident} — no routes found (parser drift?)`);
+            continue;
+        }
+
+        for (const route of targets) {
+            checked += 1;
+
+            if (!isRouteGuarded(route, router)) {
+                fail(
+                    `unguarded admin route outside /api/admin: ${route.method} ${route.path} (${entry.file})`,
+                );
+                console.log(
+                    `  FAIL ${route.method.padEnd(6)} ${route.path.padEnd(28)} [${entry.file}]`,
+                );
+            }
+        }
+
+        if (entry.scope === 'non-get') {
+            for (const route of router.routes.filter((item) => item.method === 'GET')) {
+                if (isRouteGuarded(route, router)) {
+                    fail(
+                        `public GET is guarded — this would break the storefront: ${route.method} ${route.path} (${entry.file})`,
+                    );
+                    console.log(
+                        `  FAIL public GET is guarded: ${route.path.padEnd(22)} [${entry.file}]`,
+                    );
+                }
+            }
+        }
+
+        console.log(
+            `  OK   ${entry.file.padEnd(36)} ${targets.length} route(s), scope=${entry.scope} — ${entry.note}`,
+        );
+    }
+
+    console.log(`  admin-guarded routes checked outside /api/admin: ${checked}`);
 };
 
 type Canary = { file: string; pattern: RegExp; min: number; note: string };
@@ -403,7 +626,7 @@ const checkObjectIdCanary = (): void => {
     let total = 0;
 
     for (const canary of OBJECT_ID_CANARIES) {
-        const source = readText(join(SRC_DIR, canary.file));
+        const source = readCode(join(SRC_DIR, canary.file));
         const found = source.match(canary.pattern)?.length ?? 0;
         total += found;
 
@@ -492,7 +715,10 @@ const checkGuardChainRuntime = async (): Promise<void> => {
 };
 
 const main = async (): Promise<void> => {
-    checkAdminGuardCoverage();
+    const routers = collectRouters();
+
+    checkAdminGuardCoverage(routers);
+    checkNonAdminMountedGuardCoverage(routers);
     checkObjectIdCanary();
     await checkGuardChainRuntime();
 
