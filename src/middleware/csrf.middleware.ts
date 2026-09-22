@@ -27,49 +27,49 @@ import { isAllowedOrigin } from '../config/allowed-origins';
 const STATE_CHANGING_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 
 const BLOCKED_RESPONSE = {
-  success: false,
-  message: 'Request blocked — untrusted origin',
+    success: false,
+    message: 'Request blocked — untrusted origin',
 };
 
 /** Extracts a scheme+host origin from a Referer URL, or null when unusable. */
 const parseRefererOrigin = (referer: string | undefined): string | null => {
-  if (!referer) {
-    return null;
-  }
+    if (!referer) {
+        return null;
+    }
 
-  try {
-    return new URL(referer).origin;
-  } catch {
-    return null;
-  }
+    try {
+        return new URL(referer).origin;
+    } catch {
+        return null;
+    }
 };
 
 export const csrfOriginGuard = (req: Request, res: Response, next: NextFunction): void => {
-  if (!STATE_CHANGING_METHODS.has(req.method)) {
-    next();
-    return;
-  }
-
-  const origin = req.headers.origin;
-
-  if (typeof origin === 'string' && origin.length > 0) {
-    if (isAllowedOrigin(origin)) {
-      next();
-      return;
+    if (!STATE_CHANGING_METHODS.has(req.method)) {
+        next();
+        return;
     }
 
-    res.status(403).json(BLOCKED_RESPONSE);
-    return;
-  }
+    const origin = req.headers.origin;
 
-  const refererOrigin = parseRefererOrigin(
-    typeof req.headers.referer === 'string' ? req.headers.referer : undefined
-  );
+    if (typeof origin === 'string' && origin.length > 0) {
+        if (isAllowedOrigin(origin)) {
+            next();
+            return;
+        }
 
-  if (refererOrigin && !isAllowedOrigin(refererOrigin)) {
-    res.status(403).json(BLOCKED_RESPONSE);
-    return;
-  }
+        res.status(403).json(BLOCKED_RESPONSE);
+        return;
+    }
 
-  next();
+    const refererOrigin = parseRefererOrigin(
+        typeof req.headers.referer === 'string' ? req.headers.referer : undefined
+    );
+
+    if (refererOrigin && !isAllowedOrigin(refererOrigin)) {
+        res.status(403).json(BLOCKED_RESPONSE);
+        return;
+    }
+
+    next();
 };

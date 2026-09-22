@@ -16,22 +16,22 @@
  */
 
 const PRODUCTION_ORIGINS: readonly string[] = [
-  'https://mioralane.com',
-  'https://www.mioralane.com',
-  'https://admin.mioralane.com',
+    'https://mioralane.com',
+    'https://www.mioralane.com',
+    'https://admin.mioralane.com',
 ];
 
 /** Local development servers: storefront (3000) and admin app (3001/3100). */
 const LOCAL_ORIGINS: readonly string[] = [
-  'http://localhost:3000',
-  'http://localhost:3001',
-  'http://localhost:3100',
-  'http://127.0.0.1:3000',
-  'http://127.0.0.1:3001',
-  'http://127.0.0.1:3100',
+    'http://localhost:3000',
+    'http://localhost:3001',
+    'http://localhost:3100',
+    'http://127.0.0.1:3000',
+    'http://127.0.0.1:3001',
+    'http://127.0.0.1:3100',
 ];
 
 export const getAllowedOrigins = (): string[] => [...PRODUCTION_ORIGINS, ...LOCAL_ORIGINS];
 
 export const isAllowedOrigin = (origin: string): boolean =>
-  getAllowedOrigins().includes(origin);
+    getAllowedOrigins().includes(origin);
