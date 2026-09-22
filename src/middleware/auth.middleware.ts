@@ -181,8 +181,12 @@ export const adminOnly = (
  * `tests/verify-admin-route-guards.ts`). That matters because Express 5 detects
  * a handler's returned promise and forwards rejections to `next`, which only
  * works while the handler itself is passed through unchanged.
+ *
+ * The array is frozen and typed `readonly` so the shared guard chain cannot be
+ * mutated at runtime — an accidental `push`, `splice`, or element reassignment
+ * would otherwise silently weaken every admin route at once.
  */
-export const adminGuard: RequestHandler[] = [
+export const adminGuard: readonly RequestHandler[] = Object.freeze([
   protect as RequestHandler,
   adminOnly as RequestHandler,
-];
+]);

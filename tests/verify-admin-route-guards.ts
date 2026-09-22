@@ -426,39 +426,39 @@ const ADMIN_GUARDED_ROUTERS_OUTSIDE_ADMIN_MOUNT: Array<{
      */
     publicExceptions?: Array<{ method: string; path: string; reason: string }>;
 }> = [
-    {
-        file: 'product/product.routes.ts',
-        ident: 'router',
-        scope: 'non-get',
-        note: 'storefront catalog GETs + admin writes',
-        publicExceptions: [
-            {
-                method: 'POST',
-                path: '/recommendations/cart',
-                reason:
-                    'guest cart cross-sell lookup — a read, so POST is only used to carry productIds in the body',
-            },
-        ],
-    },
-    {
-        file: 'combo/combo.routes.ts',
-        ident: 'router',
-        scope: 'non-get',
-        note: 'storefront combo GETs + admin writes',
-    },
-    {
-        file: 'media/media.routes.ts',
-        ident: 'router',
-        scope: 'non-get',
-        note: 'admin image endpoints (future customer /review-images stays open)',
-    },
-    {
-        file: 'activity-log/activity-log.routes.ts',
-        ident: 'activityLogRoutes',
-        scope: 'all',
-        note: 'audit surface — even GETs are admin-only',
-    },
-];
+        {
+            file: 'product/product.routes.ts',
+            ident: 'router',
+            scope: 'non-get',
+            note: 'storefront catalog GETs + admin writes',
+            publicExceptions: [
+                {
+                    method: 'POST',
+                    path: '/recommendations/cart',
+                    reason:
+                        'guest cart cross-sell lookup — a read, so POST is only used to carry productIds in the body',
+                },
+            ],
+        },
+        {
+            file: 'combo/combo.routes.ts',
+            ident: 'router',
+            scope: 'non-get',
+            note: 'storefront combo GETs + admin writes',
+        },
+        {
+            file: 'media/media.routes.ts',
+            ident: 'router',
+            scope: 'non-get',
+            note: 'admin image endpoints (future customer /review-images stays open)',
+        },
+        {
+            file: 'activity-log/activity-log.routes.ts',
+            ident: 'activityLogRoutes',
+            scope: 'all',
+            note: 'audit surface — even GETs are admin-only',
+        },
+    ];
 
 const isRouteGuarded = (route: RegisteredRoute, router: RouterInfo): boolean =>
     route.inlineAdminGuard ||
@@ -651,6 +651,30 @@ const checkGuardChainRuntime = async (): Promise<void> => {
 
     if (adminGuard.length !== 2) {
         fail(`adminGuard must hold exactly 2 middlewares, found ${adminGuard.length}`);
+    }
+
+    if (!Object.isFrozen(adminGuard)) {
+        fail(
+            'adminGuard is not frozen — a runtime mutation could silently weaken every admin route at once',
+        );
+    } else {
+        console.log('  OK   adminGuard is frozen (Object.isFrozen)');
+    }
+
+    // Deliberate type escape to prove the freeze is enforced, not just declared.
+    let mutationRejected = false;
+    try {
+        (adminGuard as RequestHandler[]).push(((_req, _res, next) => {
+            next();
+        }) as RequestHandler);
+    } catch {
+        mutationRejected = true;
+    }
+
+    if (!mutationRejected) {
+        fail('adminGuard accepted a runtime mutation — the freeze is not effective');
+    } else {
+        console.log('  OK   mutating adminGuard throws (freeze is enforced)');
     }
 
     if (adminGuard[0] !== (protect as unknown as RequestHandler)) {
