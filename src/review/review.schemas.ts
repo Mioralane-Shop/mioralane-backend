@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { OBJECT_ID_PATTERN } from '../utils/validation';
 
 /**
  * NOTE: review image upload is disabled across the stack.
@@ -36,14 +37,6 @@ export const MIN_REVIEW_RATING = 1;
 export const MAX_REVIEW_RATING = 5;
 export const MIN_REVIEW_LENGTH = 3;
 export const MAX_REVIEW_LENGTH = 2000;
-
-/**
- * Exactly 24 hex characters — the only string form Mongoose accepts for an
- * ObjectId. Mirrors `OBJECT_ID_PATTERN` in `order.schemas.ts`; consolidating
- * both into `src/utils/validation.ts` is proposed as a follow-up so this
- * security-relevant pattern exists in exactly one place.
- */
-const OBJECT_ID_PATTERN = /^[0-9a-fA-F]{24}$/;
 
 /**
  * Body for `POST /api/reviews`.

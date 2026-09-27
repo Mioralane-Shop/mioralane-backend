@@ -1,8 +1,5 @@
 import { z } from 'zod';
-import { numericField } from '../utils/validation';
-
-/** Mongo ObjectId as it appears in payloads. */
-const OBJECT_ID_PATTERN = /^[0-9a-fA-F]{24}$/;
+import { OBJECT_ID_PATTERN, numericField } from '../utils/validation';
 
 /**
  * Per-item quantity ceiling. The real limit on how much a customer can buy is
@@ -17,17 +14,17 @@ export const MAX_ORDER_ITEM_QUANTITY = 999;
  * surfaced as a 500. Rejecting it here turns that into a clean 400.
  */
 const orderItemSchema = z
-  .object({
-    // `productId` is an accepted alias: the cart may send either.
-    itemId: z.string().regex(OBJECT_ID_PATTERN, 'Invalid item id').optional(),
-    productId: z.string().regex(OBJECT_ID_PATTERN, 'Invalid item id').optional(),
-    itemType: z.enum(['product', 'combo']),
-    quantity: numericField(z.coerce.number().int().positive().max(MAX_ORDER_ITEM_QUANTITY)),
-  })
-  .refine((item) => item.itemId !== undefined || item.productId !== undefined, {
-    message: 'itemId is required',
-    path: ['itemId'],
-  });
+    .object({
+        // `productId` is an accepted alias: the cart may send either.
+        itemId: z.string().regex(OBJECT_ID_PATTERN, 'Invalid item id').optional(),
+        productId: z.string().regex(OBJECT_ID_PATTERN, 'Invalid item id').optional(),
+        itemType: z.enum(['product', 'combo']),
+        quantity: numericField(z.coerce.number().int().positive().max(MAX_ORDER_ITEM_QUANTITY)),
+    })
+    .refine((item) => item.itemId !== undefined || item.productId !== undefined, {
+        message: 'itemId is required',
+        path: ['itemId'],
+    });
 
 /**
  * Shape only — every field is an optional string.
@@ -38,17 +35,17 @@ const orderItemSchema = z
  * accepted here.
  */
 const orderShippingAddressSchema = z.object({
-  name: z.string().optional(),
-  phone: z.string().optional(),
-  division: z.string().optional(),
-  district: z.string().optional(),
-  area: z.string().optional(),
-  thana: z.string().optional(),
-  address: z.string().optional(),
-  detailedAddress: z.string().optional(),
-  fullAddress: z.string().optional(),
-  landmark: z.string().optional(),
-  addressId: z.string().optional(),
+    name: z.string().optional(),
+    phone: z.string().optional(),
+    division: z.string().optional(),
+    district: z.string().optional(),
+    area: z.string().optional(),
+    thana: z.string().optional(),
+    address: z.string().optional(),
+    detailedAddress: z.string().optional(),
+    fullAddress: z.string().optional(),
+    landmark: z.string().optional(),
+    addressId: z.string().optional(),
 });
 
 /**
@@ -63,12 +60,12 @@ const orderShippingAddressSchema = z.object({
  * `quoteFingerprint` feeds a mismatch check that rejects the order.
  */
 export const createOrderSchema = z.object({
-  items: z.array(orderItemSchema),
-  shippingAddress: orderShippingAddressSchema.optional(),
-  addressId: z.string().min(1).optional(),
-  paymentMethod: z.enum(['cash_on_delivery']).optional(),
-  couponCode: z.string().optional(),
-  quoteFingerprint: z.string().optional(),
+    items: z.array(orderItemSchema),
+    shippingAddress: orderShippingAddressSchema.optional(),
+    addressId: z.string().min(1).optional(),
+    paymentMethod: z.enum(['cash_on_delivery']).optional(),
+    couponCode: z.string().optional(),
+    quoteFingerprint: z.string().optional(),
 });
 
 export type CreateOrderInput = z.infer<typeof createOrderSchema>;

@@ -31,8 +31,13 @@
  *     `review.service.ts` drop from 6 to 5. The guarantee was moved, not
  *     dropped — it now lives in `createReviewSchema`'s 24-hex pattern enforced
  *     by `validate()`. Check B cannot see that coupling, so it is asserted
- *     explicitly here. If either half is removed, the ObjectId guard on review
+ *     explicitly here. If any half is removed, the ObjectId guard on review
  *     submission is genuinely gone and this check fails.
+ *
+ *     A later chore moved the pattern itself into `utils/validation.ts` so both
+ *     schemas share one definition; the first entry now guards the definition
+ *     and the consumers are asserted separately, so a schema cannot quietly
+ *     grow its own weaker copy again.
  *
  *  C. Guard-chain runtime contract. Proves `adminGuard` holds the original
  *     `protect`/`adminOnly` function references (no wrapper), and that
@@ -664,11 +669,26 @@ const checkObjectIdCanary = (): void => {
  */
 const ZOD_OBJECT_ID_CANARIES: Canary[] = [
     {
-        file: 'review/review.schemas.ts',
-        // Matches the literal `/^[0-9a-fA-F]{24}$/` source text, not a negated class.
+        file: 'utils/validation.ts',
+        // The single definition. Matches the literal `/^[0-9a-fA-F]{24}$/` source
+        // text, not a negated class.
         pattern: /\^\[0-9a-fA-F\]\{24\}/g,
         min: 1,
-        note: 'createReviewSchema.productId 24-hex pattern',
+        note: 'the one OBJECT_ID_PATTERN definition',
+    },
+    {
+        file: 'review/review.schemas.ts',
+        // Proves the schema still consumes the shared pattern rather than
+        // defining (or weakening) its own.
+        pattern: /OBJECT_ID_PATTERN/g,
+        min: 1,
+        note: 'createReviewSchema consumes the shared pattern',
+    },
+    {
+        file: 'order/order.schemas.ts',
+        pattern: /OBJECT_ID_PATTERN/g,
+        min: 1,
+        note: 'order schemas consume the shared pattern',
     },
     {
         file: 'review/review.routes.ts',

@@ -15,12 +15,12 @@ const router = Router();
 router.get('/product/:productId', getProductReviewList as RequestHandler);
 
 // Authenticated customer flow
-  router.post(
-      '/',
-      protect as RequestHandler,
-      validate({ body: createReviewSchema }),
-      createReview as RequestHandler
-  );
+router.post(
+    '/',
+    protect as RequestHandler,
+    validate({ body: createReviewSchema }),
+    createReview as RequestHandler
+);
 router.get('/me', protect as RequestHandler, getMyReviews as RequestHandler);
 router.get(
     '/eligibility/:productId',
