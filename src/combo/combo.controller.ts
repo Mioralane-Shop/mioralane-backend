@@ -5,6 +5,41 @@ import { slugify } from '../utils/slugify';
 import mongoose from 'mongoose';
 import { extractMediaUrls, normalizeMediaAssets } from '../media/media.utils';
 import type { MediaAsset } from '../media/media.types';
+import {
+    describeCastError,
+    sanitizeValidationMessages,
+} from '../middleware/error.middleware';
+import { applyCatalogStockChange } from '../inventory/inventory-transaction.service';
+import {
+    buildActivityChanges,
+    pickActivitySnapshot,
+    recordActivity,
+    resolveUpdateAction,
+} from '../activity-log/activity-log.service';
+import { updateComboSchema } from './combo.schemas';
+import type { CreateComboInput, UpdateComboInput } from './combo.schemas';
+
+/**
+ * The mutable field set for `updateCombo`, read straight off the schema so the
+ * allowlist and the validation contract cannot drift apart.
+ */
+const UPDATE_COMBO_FIELDS = Object.keys(updateComboSchema.shape) as (keyof UpdateComboInput)[];
+
+/** Fields kept in activity snapshots — keeps audit rows small and readable. */
+const COMBO_AUDIT_FIELDS = [
+    'title',
+    'slug',
+    'brand',
+    'category',
+    'price',
+    'compareAtPrice',
+    'savings',
+    'stock',
+    'routineTag',
+    'badge',
+    'isBestSeller',
+    'isNewArrival',
+];
 
 // ─── Types ────────────────────────────────────────────────────────────────
 
@@ -119,17 +154,13 @@ const escapeRegex = (value: string): string =>
  */
 export const createCombo = async (req: Request, res: Response): Promise<void> => {
     try {
-        const body = req.body as Omit<ICombo, "rating" | "numReviews">;
-        const media = normalizeMediaAssets((body as Record<string, unknown>).media);
+        const body = req.body as CreateComboInput;
+        const media = normalizeMediaAssets(body.media);
 
-        if (!body.title || body.price === undefined || body.price === null) {
-            res.status(400).json({
-                success: false,
-                message: 'Missing required fields: title, price',
-            });
-            return;
-        }
-
+        // `title` and `price` are guaranteed by `createComboSchema`, so the former
+        // "Missing required fields: title, price" 400 was removed in P0-3.10 as
+        // unreachable. The images check below stays: `images` is optional in the
+        // schema because a payload may supply `media` only.
         if (media.length > 0) {
             body.media = media as MediaAsset[];
             body.images = extractMediaUrls(media);
@@ -143,22 +174,29 @@ export const createCombo = async (req: Request, res: Response): Promise<void> =>
             return;
         }
 
-        // Default category to "combo" if not provided
-        const data: ICombo = {
+        // Default category to "combo" if not provided.
+        // `savings` is always derived from the actual bundle prices; it can no
+        // longer arrive from the client (the schema strips it).
+        const compareAtPrice = body.compareAtPrice ?? 0;
+        const data = {
             ...body,
             category: body.category || 'combo',
             brand: body.brand || 'Mioralane Bundle',
             slug: slugify(body.title),
             rating: 0,
             numReviews: 0,
+            savings: compareAtPrice > body.price ? compareAtPrice - body.price : 0,
         };
 
-        // Keep savings derived from the actual bundle prices
-        data.savings = data.compareAtPrice && data.compareAtPrice > data.price
-            ? data.compareAtPrice - data.price
-            : 0;
-
         const combo = await Combo.create(data);
+
+        await recordActivity(req, {
+            action: 'CREATE',
+            entityType: 'COMBO',
+            entityId: combo._id.toString(),
+            entityName: combo.title,
+            after: pickActivitySnapshot(combo.toObject(), COMBO_AUDIT_FIELDS),
+        });
 
         res.status(201).json({
             success: true,
@@ -177,17 +215,16 @@ export const createCombo = async (req: Request, res: Response): Promise<void> =>
             res.status(400).json({
                 success: false,
                 message: 'Validation failed',
-                errors: [error.path === 'stock' ? 'Stock must be a non-negative integer' : error.message],
+                errors: [describeCastError(error)],
             });
             return;
         }
 
         if (error.name === 'ValidationError') {
-            const messages = Object.values(error.errors).map((e: any) => e.message);
             res.status(400).json({
                 success: false,
                 message: 'Validation failed',
-                errors: messages,
+                errors: sanitizeValidationMessages(error),
             });
             return;
         }
@@ -425,8 +462,8 @@ export const getComboByIdOrSlug = async (req: Request, res: Response): Promise<v
 export const updateCombo = async (req: Request, res: Response): Promise<void> => {
     try {
         const { id } = req.params as { id: string };
-        const updates = req.body;
-        const media = normalizeMediaAssets(updates.media);
+        const parsed = req.body as UpdateComboInput;
+        const media = normalizeMediaAssets(parsed.media);
 
         if (!isValidObjectId(id)) {
             res.status(400).json({
@@ -436,16 +473,14 @@ export const updateCombo = async (req: Request, res: Response): Promise<void> =>
             return;
         }
 
-        // Only allow specific fields to be updated
-        const allowed = [
-            'badge', 'title', 'description', 'price', 'compareAtPrice', 'savings',
-            'includedItems', 'routineTag', 'images', 'media', 'hoverImage', 'size', 'volume', 'stock',
-            'concerns', 'skinType', 'isBestSeller', 'isNewArrival',
-        ];
-        const sanitized: Record<string, any> = {};
-        for (const key of allowed) {
-            if (updates[key] !== undefined) {
-                sanitized[key] = updates[key];
+        // Positive allowlist, derived from `updateComboSchema` so the two can never
+        // drift: a second layer in front of `combo.set()`. `savings` is gone because
+        // the schema strips it and the handler recomputes it below.
+        const sanitized: Partial<ICombo> = {};
+        for (const key of UPDATE_COMBO_FIELDS) {
+            const value = parsed[key];
+            if (value !== undefined) {
+                (sanitized as Record<string, unknown>)[key] = value;
             }
         }
 
@@ -461,13 +496,64 @@ export const updateCombo = async (req: Request, res: Response): Promise<void> =>
             return;
         }
 
+        // `stock` is guaranteed to be a non-negative integer by the schema, so no
+        // typeof guard is needed to discover whether the client asked for a change.
+        const requestedStock = sanitized.stock;
+        const previousStock = combo.stock ?? 0;
+        // Snapshot before any mutation so the audit trail can diff the edit.
+        const comboBeforeEdit = combo.toObject();
+
+        // Stock is never written directly: every change goes through the
+        // inventory ledger so the audit trail cannot be bypassed here.
+        delete sanitized.stock;
+
         combo.set(sanitized);
 
         const compareAtPrice = typeof combo.compareAtPrice === 'number' ? combo.compareAtPrice : 0;
         const price = typeof combo.price === 'number' ? combo.price : 0;
         combo.savings = compareAtPrice > price ? compareAtPrice - price : 0;
 
-        await combo.save();
+        if (requestedStock === undefined || requestedStock === previousStock) {
+            await combo.save();
+        } else {
+            const session = await mongoose.startSession();
+
+            try {
+                await session.withTransaction(async () => {
+                    await combo.save({ session });
+
+                    await applyCatalogStockChange({
+                        itemType: 'combo',
+                        itemId: id,
+                        previousStock,
+                        nextStock: requestedStock,
+                        performedBy: req.user?.id,
+                        performedByRole: 'admin',
+                        reason: 'Stock updated from the combo editor',
+                        session,
+                    });
+                });
+            } finally {
+                await session.endSession();
+            }
+        }
+
+        const comboChanges = buildActivityChanges(
+            comboBeforeEdit,
+            combo.toObject()
+        );
+
+        if (comboChanges.changedFields.length > 0) {
+            await recordActivity(req, {
+                action: resolveUpdateAction(comboChanges.changedFields),
+                entityType: 'COMBO',
+                entityId: id,
+                entityName: combo.title,
+                before: comboChanges.before,
+                after: comboChanges.after,
+                metadata: { changedFields: comboChanges.changedFields },
+            });
+        }
 
         res.status(200).json({ success: true, combo });
     } catch (error: any) {
@@ -475,14 +561,13 @@ export const updateCombo = async (req: Request, res: Response): Promise<void> =>
             res.status(400).json({
                 success: false,
                 message: 'Validation failed',
-                errors: [error.path === 'stock' ? 'Stock must be a non-negative integer' : error.message],
+                errors: [describeCastError(error)],
             });
             return;
         }
 
         if (error.name === 'ValidationError') {
-            const messages = Object.values(error.errors).map((e: any) => e.message);
-            res.status(400).json({ success: false, message: 'Validation failed', errors: messages });
+            res.status(400).json({ success: false, message: 'Validation failed', errors: sanitizeValidationMessages(error) });
             return;
         }
         console.error('Error updating combo:', error);
@@ -533,6 +618,14 @@ export const deleteCombo = async (req: Request, res: Response): Promise<void> =>
             });
             return;
         }
+
+        await recordActivity(req, {
+            action: 'DELETE',
+            entityType: 'COMBO',
+            entityId: id,
+            entityName: combo.title,
+            before: pickActivitySnapshot(combo.toObject(), COMBO_AUDIT_FIELDS),
+        });
 
         res.status(200).json({
             success: true,

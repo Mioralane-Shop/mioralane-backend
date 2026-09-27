@@ -3,8 +3,9 @@ import mongoose from 'mongoose';
 import { Response } from 'express';
 import { Product } from '../product/product.model';
 import { Combo } from '../combo/combo.model';
-import { Order, OrderItemType, PaymentMethod } from './order.model';
+import { Order, OrderItemType } from './order.model';
 import { AuthenticatedRequest } from '../middleware/auth.middleware';
+import { sanitizeErrorMessage } from '../middleware/error.middleware';
 import { OrderStatus } from '../enums/order-status.enum';
 import { CouponUsage } from '../promotion/coupon-usage.model';
 import {
@@ -19,33 +20,13 @@ import {
   resolveShipping,
   validateAndNormalizeShippingAddress,
 } from '../shipping/shipping.service';
+import { resolveSavedAddressForCheckout } from '../address/address.service';
+import { recordOrderStockDeductions } from '../inventory/inventory-transaction.service';
+import { pickActivitySnapshot, recordActivity } from '../activity-log/activity-log.service';
+import type { CreateOrderInput } from './order.schemas';
 
-type OrderPayloadItem = {
-  itemId?: string;
-  productId?: string;
-  itemType?: OrderItemType;
-  title?: string;
-  price?: number;
-  thumbnail?: string;
-  quantity: number;
-};
-
-type CreateOrderBody = {
-  items?: OrderPayloadItem[];
-  shippingAddress?: {
-    name?: string;
-    phone?: string;
-    division?: string;
-    district?: string;
-    area?: string;
-    address?: string;
-    detailedAddress?: string;
-    landmark?: string;
-  };
-  paymentMethod?: PaymentMethod;
-  couponCode?: string;
-  quoteFingerprint?: string;
-};
+/** Fields kept in the participant order snapshot. */
+const ORDER_AUDIT_FIELDS = ['orderNumber', 'orderStatus', 'totalAmount', 'paymentMethod'];
 
 type HttpError = Error & { statusCode?: number; code?: string; quote?: unknown };
 
@@ -64,7 +45,7 @@ const createHttpError = (statusCode: number, message: string, code?: string, quo
 };
 
 export const createOrder = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
-  const body = req.body as CreateOrderBody | undefined;
+  const body = req.body as CreateOrderInput | undefined;
   const userId = req.user?.id;
 
   if (!userId) {
@@ -86,14 +67,33 @@ export const createOrder = async (req: AuthenticatedRequest, res: Response): Pro
     return;
   }
 
+  // When checkout sends a saved address id, every shipping field is read back
+  // from the customer's own address book — client values are ignored so a
+  // foreign address id can never be used to ship an order.
+  const savedAddressId = (body?.addressId ?? shippingAddress?.addressId ?? '').trim();
+  let shippingAddressInput = shippingAddress;
+
+  if (savedAddressId) {
+    try {
+      shippingAddressInput = await resolveSavedAddressForCheckout(userId, savedAddressId);
+    } catch (error) {
+      const err = error as HttpError;
+      res.status(err.statusCode ?? 400).json({
+        success: false,
+        message: sanitizeErrorMessage(error, 'Saved delivery address could not be used'),
+        code: err.code ?? 'invalid_address_id',
+      });
+      return;
+    }
+  }
+
   let normalizedShippingAddress;
   try {
-    normalizedShippingAddress = validateAndNormalizeShippingAddress(shippingAddress);
+    normalizedShippingAddress = validateAndNormalizeShippingAddress(shippingAddressInput);
   } catch (error) {
-    const err = error as HttpError;
     res.status(400).json({
       success: false,
-      message: err.message,
+      message: sanitizeErrorMessage(error, 'Invalid shipping address'),
     });
     return;
   }
@@ -148,13 +148,13 @@ export const createOrder = async (req: AuthenticatedRequest, res: Response): Pro
         const sourceDoc =
           item.itemType === 'combo'
             ? await Combo.findById(item.itemId)
-                .session(session)
-                .select('_id title price images stock category')
-                .exec()
+              .session(session)
+              .select('_id title price images stock category')
+              .exec()
             : await Product.findById(item.itemId)
-                .session(session)
-                .select('_id title price salePrice images stock category availabilityMode preOrder')
-                .exec();
+              .session(session)
+              .select('_id title price salePrice images stock category availabilityMode preOrder')
+              .exec();
 
         if (!sourceDoc) {
           throw createHttpError(
@@ -212,10 +212,10 @@ export const createOrder = async (req: AuthenticatedRequest, res: Response): Pro
           fulfillmentType: isPreOrderProduct ? 'pre_order' : 'regular',
           preOrderSnapshot: isPreOrderProduct
             ? {
-                expectedArrivalDate: preOrder.expectedArrivalDate,
-                customerMessage: preOrder.customerMessage,
-                quantityLimit: preOrderLimit,
-              }
+              expectedArrivalDate: preOrder.expectedArrivalDate,
+              customerMessage: preOrder.customerMessage,
+              quantityLimit: preOrderLimit,
+            }
             : undefined,
         });
       }
@@ -235,12 +235,12 @@ export const createOrder = async (req: AuthenticatedRequest, res: Response): Pro
       const couponCode = typeof body?.couponCode === 'string' ? body.couponCode.trim() : '';
       const couponPromotion = couponCode
         ? await validateCouponForOrder({
-            couponCode,
-            userId,
-            items: discountItems,
-            itemsTotal,
-            session,
-          })
+          couponCode,
+          userId,
+          items: discountItems,
+          itemsTotal,
+          session,
+        })
         : undefined;
       const baseShipping = await resolveShipping({
         address: normalizedShippingAddress,
@@ -304,6 +304,14 @@ export const createOrder = async (req: AuthenticatedRequest, res: Response): Pro
         );
       }
 
+      // Stock actually removed by this checkout — ledgered in the same
+      // transaction once the order exists.
+      const deductedStockLines: Array<{
+        itemType: OrderItemType;
+        itemId: string;
+        quantity: number;
+      }> = [];
+
       for (const item of resolvedItems) {
         if (item.fulfillmentType === 'pre_order') {
           const updated = await Product.findOneAndUpdate(
@@ -332,19 +340,25 @@ export const createOrder = async (req: AuthenticatedRequest, res: Response): Pro
         const updated =
           item.itemType === 'combo'
             ? await Combo.findOneAndUpdate(
-                { _id: item.sourceId, stock: { $gte: item.quantity } },
-                { $inc: { stock: -item.quantity } },
-                { new: true, session }
-              ).exec()
+              { _id: item.sourceId, stock: { $gte: item.quantity } },
+              { $inc: { stock: -item.quantity } },
+              { new: true, session }
+            ).exec()
             : await Product.findOneAndUpdate(
-                { _id: item.sourceId, stock: { $gte: item.quantity } },
-                { $inc: { stock: -item.quantity } },
-                { new: true, session }
-              ).exec();
+              { _id: item.sourceId, stock: { $gte: item.quantity } },
+              { $inc: { stock: -item.quantity } },
+              { new: true, session }
+            ).exec();
 
         if (!updated) {
           throw createHttpError(409, 'One or more items are out of stock');
         }
+
+        deductedStockLines.push({
+          itemType: item.itemType,
+          itemId: item.itemId as string,
+          quantity: item.quantity,
+        });
       }
 
       const preOrderDates = resolvedItems
@@ -406,6 +420,13 @@ export const createOrder = async (req: AuthenticatedRequest, res: Response): Pro
         { session }
       );
 
+      await recordOrderStockDeductions(
+        order._id.toString(),
+        userId,
+        deductedStockLines,
+        session
+      );
+
       if (selectedPromotion.coupon) {
         await reserveCouponUsage({ _id: selectedPromotion.coupon.couponId }, session);
         await CouponUsage.create(
@@ -421,6 +442,18 @@ export const createOrder = async (req: AuthenticatedRequest, res: Response): Pro
           { session }
         );
       }
+
+      // Participant activity, written in the same transaction as the order so a
+      // rolled-back checkout leaves no log behind.
+      await recordActivity(req, {
+        action: 'CREATE',
+        entityType: 'ORDER',
+        entityId: order._id.toString(),
+        entityName: order.orderNumber ?? order._id.toString(),
+        after: pickActivitySnapshot(order.toObject(), ORDER_AUDIT_FIELDS),
+        metadata: { itemCount: order.items?.length ?? 0 },
+        session,
+      });
 
       return order;
     });
@@ -505,9 +538,9 @@ export const getOrderById = async (req: AuthenticatedRequest, res: Response): Pr
     role === 'admin'
       ? { _id: orderId }
       : {
-          _id: orderId,
-          user: userId,
-        }
+        _id: orderId,
+        user: userId,
+      }
   );
 
   if (!order) {

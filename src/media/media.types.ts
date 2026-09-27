@@ -1,4 +1,6 @@
 export type MediaAssetProvider = 'imagekit';
+// Review images are temporarily disabled — restore 'review' to re-enable review images.
+// export type MediaAssetType = 'product' | 'combo' | 'campaign' | 'review';
 export type MediaAssetType = 'product' | 'combo' | 'campaign';
 
 export interface MediaAsset {

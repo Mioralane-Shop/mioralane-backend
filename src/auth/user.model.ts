@@ -31,7 +31,11 @@ const userSchema = new Schema<IUser>({
   },
   password: {
     type: String,
-    minlength: [6, 'Password must be at least 6 characters'],
+    minlength: [8, 'Password must be at least 8 characters'],
+    // Never selected by default: a query must opt in with `.select('+password')`.
+    // This keeps the bcrypt hash out of every generic document load, including
+    // the `.lean()` / `toObject()` paths that bypass the toJSON transform below.
+    select: false,
   },
   googleId: {
     type: String,

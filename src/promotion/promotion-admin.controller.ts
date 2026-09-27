@@ -2,10 +2,23 @@ import mongoose from 'mongoose';
 import type { SortOrder } from 'mongoose';
 import { Response } from 'express';
 import { AuthenticatedRequest } from '../middleware/auth.middleware';
+import { sanitizeValidationMessages } from '../middleware/error.middleware';
 import { getPaginationParams } from '../utils/pagination';
 import { Coupon } from './coupon.model';
 import { CouponUsage } from './coupon-usage.model';
 import { getRuntimeCampaignStatus, PromotionCampaign } from './promotion-campaign.model';
+import {
+  buildActivityChanges,
+  pickActivitySnapshot,
+  recordActivity,
+  resolveUpdateAction,
+} from '../activity-log/activity-log.service';
+import type {
+  CreateCampaignInput,
+  CreateCouponInput,
+  UpdateCampaignInput,
+  UpdateCouponInput,
+} from './promotion.schemas';
 
 const escapeRegex = (value: string): string => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
@@ -22,7 +35,7 @@ const sendMutationError = (res: Response, error: unknown, label: string): void =
     res.status(400).json({
       success: false,
       message: 'Validation failed',
-      errors: Object.values(error.errors).map((entry) => entry.message),
+      errors: sanitizeValidationMessages(error),
     });
     return;
   }
@@ -99,7 +112,19 @@ export const getCampaign = async (req: AuthenticatedRequest, res: Response): Pro
 
 export const createCampaign = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
-    const campaign = await PromotionCampaign.create(req.body);
+    // `req.body` is the parsed `createCampaignSchema` output, so server-owned
+    // fields (`publishedAt`, `_id`, `createdAt`, `updatedAt`) can no longer be
+    // injected — previously this line trusted the whole body.
+    const campaign = await PromotionCampaign.create(req.body as CreateCampaignInput);
+
+    await recordActivity(req, {
+      action: 'CREATE',
+      entityType: 'CAMPAIGN',
+      entityId: campaign._id.toString(),
+      entityName: campaign.name,
+      after: pickActivitySnapshot(campaign.toObject()),
+    });
+
     res.status(201).json({ success: true, campaign });
   } catch (error) {
     sendMutationError(res, error, '[createCampaign]');
@@ -118,8 +143,27 @@ export const updateCampaign = async (req: AuthenticatedRequest, res: Response): 
       res.status(404).json({ success: false, message: 'Campaign not found' });
       return;
     }
-    campaign.set(req.body);
+    const campaignBeforeEdit = campaign.toObject();
+    campaign.set(req.body as UpdateCampaignInput);
     await campaign.save();
+
+    const campaignChanges = buildActivityChanges(
+      campaignBeforeEdit,
+      campaign.toObject()
+    );
+
+    if (campaignChanges.changedFields.length > 0) {
+      await recordActivity(req, {
+        action: resolveUpdateAction(campaignChanges.changedFields),
+        entityType: 'CAMPAIGN',
+        entityId: id,
+        entityName: campaign.name,
+        before: campaignChanges.before,
+        after: campaignChanges.after,
+        metadata: { changedFields: campaignChanges.changedFields },
+      });
+    }
+
     res.json({ success: true, campaign });
   } catch (error) {
     sendMutationError(res, error, '[updateCampaign]');
@@ -137,6 +181,15 @@ export const deleteCampaign = async (req: AuthenticatedRequest, res: Response): 
     res.status(404).json({ success: false, message: 'Campaign not found' });
     return;
   }
+
+  await recordActivity(req, {
+    action: 'DELETE',
+    entityType: 'CAMPAIGN',
+    entityId: id,
+    entityName: deleted.name,
+    before: pickActivitySnapshot(deleted.toObject()),
+  });
+
   res.json({ success: true, message: 'Campaign deleted successfully' });
 };
 
@@ -212,7 +265,18 @@ export const getCoupon = async (req: AuthenticatedRequest, res: Response): Promi
 
 export const createCoupon = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
-    const coupon = await Coupon.create(req.body);
+    // Server-owned `usageCount` / `_id` / timestamps are stripped by
+    // `createCouponSchema`, so a new coupon always starts from the model default.
+    const coupon = await Coupon.create(req.body as CreateCouponInput);
+
+    await recordActivity(req, {
+      action: 'CREATE',
+      entityType: 'COUPON',
+      entityId: coupon._id.toString(),
+      entityName: coupon.code,
+      after: pickActivitySnapshot(coupon.toObject()),
+    });
+
     res.status(201).json({ success: true, coupon });
   } catch (error) {
     sendMutationError(res, error, '[createCoupon]');
@@ -231,8 +295,27 @@ export const updateCoupon = async (req: AuthenticatedRequest, res: Response): Pr
       res.status(404).json({ success: false, message: 'Coupon not found' });
       return;
     }
-    coupon.set(req.body);
+    const couponBeforeEdit = coupon.toObject();
+    coupon.set(req.body as UpdateCouponInput);
     await coupon.save();
+
+    const couponChanges = buildActivityChanges(
+      couponBeforeEdit,
+      coupon.toObject()
+    );
+
+    if (couponChanges.changedFields.length > 0) {
+      await recordActivity(req, {
+        action: resolveUpdateAction(couponChanges.changedFields),
+        entityType: 'COUPON',
+        entityId: id,
+        entityName: coupon.code,
+        before: couponChanges.before,
+        after: couponChanges.after,
+        metadata: { changedFields: couponChanges.changedFields },
+      });
+    }
+
     res.json({ success: true, coupon });
   } catch (error) {
     sendMutationError(res, error, '[updateCoupon]');
@@ -250,5 +333,14 @@ export const deleteCoupon = async (req: AuthenticatedRequest, res: Response): Pr
     res.status(404).json({ success: false, message: 'Coupon not found' });
     return;
   }
+
+  await recordActivity(req, {
+    action: 'DELETE',
+    entityType: 'COUPON',
+    entityId: id,
+    entityName: deleted.code,
+    before: pickActivitySnapshot(deleted.toObject()),
+  });
+
   res.json({ success: true, message: 'Coupon deleted successfully' });
 };
