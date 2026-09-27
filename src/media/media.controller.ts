@@ -15,6 +15,7 @@ import {
 } from '@imagekit/nodejs';
 import { ImageKitService, SupportedImageMimeType } from '../imagekit/imagekit.service';
 import { MediaAssetType } from './media.types';
+import type { MediaUploadInput } from './media.schemas';
 
 type MulterFile = {
   buffer: Buffer;
@@ -24,8 +25,6 @@ type MulterFile = {
 };
 
 const MAX_MEDIA_UPLOAD_SIZE_BYTES = 8 * 1024 * 1024;
-
-const ALLOWED_ASSET_TYPES: MediaAssetType[] = ['product', 'combo', 'campaign'];
 
 const getStatusCode = (error: unknown): number => {
   if (error instanceof BadRequestError) return 400;
@@ -53,20 +52,15 @@ const getSafeMessage = (error: unknown): string => {
   return 'Internal server error';
 };
 
-const parseAssetType = (value: unknown): MediaAssetType | null => {
-  if (typeof value !== 'string') {
-    return null;
-  }
-
-  const normalized = value.trim().toLowerCase();
-  return ALLOWED_ASSET_TYPES.includes(normalized as MediaAssetType) ? (normalized as MediaAssetType) : null;
-};
-
 export class MediaController {
   constructor(private readonly imageKitService: ImageKitService) { }
 
   async uploadImage(req: Request, res: Response): Promise<void> {
-    await this.uploadWithAssetType(req, res, parseAssetType(req.body?.assetType));
+    // `assetType` is guaranteed to be an allowed value by `mediaUploadSchema`
+    // (validate() runs between multer and this controller), so the former
+    // `parseAssetType` normaliser was removed in P0-3.8 as unreachable.
+    const { assetType } = req.body as MediaUploadInput;
+    await this.uploadWithAssetType(req, res, assetType);
   }
 
   // Review images are temporarily disabled — restore this method to re-enable review image uploads.
@@ -81,19 +75,14 @@ export class MediaController {
   private async uploadWithAssetType(
     req: Request,
     res: Response,
-    assetType: MediaAssetType | null
+    assetType: MediaAssetType
   ): Promise<void> {
     try {
       const file = (req as Request & { file?: MulterFile }).file;
 
-      if (!assetType) {
-        res.status(400).json({
-          success: false,
-          message: 'assetType must be product, combo, or campaign',
-        });
-        return;
-      }
-
+      // The former `if (!assetType)` 400 was removed in P0-3.8: the schema now
+      // rejects a missing/unknown assetType with the identical message, before
+      // this controller is reached.
       if (!file) {
         res.status(400).json({
           success: false,

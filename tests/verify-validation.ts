@@ -63,7 +63,9 @@ import {
     adjustInventoryItem,
     stockInInventoryItem,
 } from '../src/inventory/inventory.controller';
+import { mediaUploadSchema } from '../src/media/media.schemas';
 import type { AuthenticatedRequest } from '../src/middleware/auth.middleware';
+import multer from 'multer';
 
 type Json = unknown;
 
@@ -143,6 +145,9 @@ const paramsSchema = z.object({
 
 const AUTH_MESSAGE_OVERRIDE = 'Username, email, and password are required';
 
+/** The exact 400 wording `media.routes.ts` pins on the upload route. */
+const MEDIA_ASSET_TYPE_MESSAGE = 'assetType must be product, combo, or campaign';
+
 /** The exact 400 wordings the auth routes must keep (see auth.routes.ts). */
 const AUTH_REGISTER_MESSAGE = 'Username, email, and password are required';
 const AUTH_LOGIN_MESSAGE = 'Username or email and password are required';
@@ -176,6 +181,22 @@ const echo = (req: express.Request, res: express.Response): void => {
 const stubAuth: RequestHandler = (req, _res, next) => {
     (req as AuthenticatedRequest).user = { id: '507f1f77bcf86cd799439011', role: 'user' };
     next();
+};
+
+/**
+ * Mirrors the real upload chain's shape: multer FIRST (it is what populates
+ * `req.body` for a multipart request), then `validate()`. The harness cannot reuse
+ * the route file's private `handleSingleUpload`, so the ordering guarantee for the
+ * real chain is asserted statically instead (see section 7b).
+ */
+const testUpload = multer({ storage: multer.memoryStorage() });
+
+const echoMultipart = (req: express.Request, res: express.Response): void => {
+    res.json({
+        ok: true,
+        body: req.body,
+        fileReceived: Boolean((req as express.Request & { file?: unknown }).file),
+    });
 };
 
 const buildApp = (): express.Application => {
@@ -267,6 +288,22 @@ const buildApp = (): express.Application => {
         adjustInventoryItem,
     );
 
+    // Media schema (P0-3.8). Two routes: a JSON one for the schema itself, and a
+    // multipart one whose chain mirrors the real `POST /api/media/images` exactly
+    // (multer → validate → handler) so the after-multer ordering is exercised for
+    // real rather than only asserted statically.
+    app.post(
+        '/media/upload-json',
+        validate({ body: mediaUploadSchema, message: MEDIA_ASSET_TYPE_MESSAGE }),
+        echo,
+    );
+    app.post(
+        '/media/upload',
+        testUpload.single('file'),
+        validate({ body: mediaUploadSchema, message: MEDIA_ASSET_TYPE_MESSAGE }),
+        echoMultipart,
+    );
+
     // Everything below passes through the global operator strip first.
     app.use(stripMongoOperators);
 
@@ -309,6 +346,31 @@ const postJson = async (url: string, payload: Json): Promise<ApiResponse> => {
 
 const getJson = async (url: string): Promise<ApiResponse> => {
     const response = await fetch(url, { signal: AbortSignal.timeout(5000) });
+
+    return { status: response.status, body: (await response.json()) as Record<string, unknown> };
+};
+
+/** Multipart POST with a real file part, so multer actually parses the body. */
+const postMultipart = async (
+    url: string,
+    fields: Record<string, string>,
+): Promise<ApiResponse> => {
+    const form = new FormData();
+    form.append(
+        'file',
+        new Blob([new Uint8Array([137, 80, 78, 71])], { type: 'image/png' }),
+        'tiny.png',
+    );
+
+    for (const [key, value] of Object.entries(fields)) {
+        form.append(key, value);
+    }
+
+    const response = await fetch(url, {
+        method: 'POST',
+        body: form,
+        signal: AbortSignal.timeout(5000),
+    });
 
     return { status: response.status, body: (await response.json()) as Record<string, unknown> };
 };
@@ -1090,6 +1152,103 @@ const checkInventorySchemas = async (url: string): Promise<void> => {
     );
 };
 
+/**
+ * Body of `POST /api/media/images`. `assetType` is the only field the client may
+ * influence; the file itself is multer's job.
+ */
+const checkMediaSchema = async (url: string): Promise<void> => {
+    console.log('\n=== 4f. media schema (P0-3.8) ===');
+
+    const valid = await postJson(`${url}/media/upload-json`, { assetType: 'product' });
+    check(
+        'media: valid assetType passes unchanged',
+        valid.status === 200 && deepEqual(valid.body.body, { assetType: 'product' }),
+        `status=${valid.status} body=${JSON.stringify(valid.body.body)}`,
+    );
+
+    const upper = await postJson(`${url}/media/upload-json`, { assetType: 'PRODUCT' });
+    const upperValue = (upper.body.body as Record<string, unknown> | undefined)?.assetType;
+    check(
+        "media: 'PRODUCT' is still accepted and normalised to 'product' (parseAssetType's behaviour preserved)",
+        upper.status === 200 && upperValue === 'product',
+        `status=${upper.status} assetType=${JSON.stringify(upperValue)}`,
+    );
+
+    const padded = await postJson(`${url}/media/upload-json`, { assetType: '  combo  ' });
+    const paddedValue = (padded.body.body as Record<string, unknown> | undefined)?.assetType;
+    check(
+        "media: '  combo  ' is still trimmed and accepted",
+        padded.status === 200 && paddedValue === 'combo',
+        `status=${padded.status} assetType=${JSON.stringify(paddedValue)}`,
+    );
+
+    const disabledType = await postJson(`${url}/media/upload-json`, { assetType: 'review' });
+    check(
+        "media: 'review' is rejected while review uploads are disabled",
+        disabledType.status === 400 && disabledType.body.message === MEDIA_ASSET_TYPE_MESSAGE,
+        `status=${disabledType.status} message=${String(disabledType.body.message)}`,
+    );
+
+    const bogus = await postJson(`${url}/media/upload-json`, { assetType: 'bogus' });
+    check(
+        "media: unknown assetType keeps the route's exact legacy 400 wording",
+        bogus.status === 400 && bogus.body.message === MEDIA_ASSET_TYPE_MESSAGE,
+        `status=${bogus.status} message=${String(bogus.body.message)}`,
+    );
+
+    const missing = await postJson(`${url}/media/upload-json`, {});
+    check(
+        "media: missing assetType 400s with the same wording (it is a required field)",
+        missing.status === 400 && missing.body.message === MEDIA_ASSET_TYPE_MESSAGE,
+        `status=${missing.status} message=${String(missing.body.message)}`,
+    );
+
+    const operatorType = await postJson(`${url}/media/upload-json`, { assetType: { $ne: null } });
+    check(
+        'media: a non-string assetType (operator payload) is rejected',
+        operatorType.status === 400,
+        `status=${operatorType.status} message=${String(operatorType.body.message)}`,
+    );
+
+    const extra = await postJson(`${url}/media/upload-json`, {
+        assetType: 'product',
+        folder: '/evil',
+        fileNamePrefix: 'evil',
+        isPrivate: true,
+    });
+    check(
+        'media: folder/fileNamePrefix/isPrivate are stripped — a client cannot choose its ImageKit destination',
+        extra.status === 200 && deepEqual(extra.body.body, { assetType: 'product' }),
+        `status=${extra.status} body=${JSON.stringify(extra.body.body)}`,
+    );
+
+    const multipart = await postMultipart(`${url}/media/upload`, { assetType: 'campaign' });
+    check(
+        'media: multipart upload validates after multer populates req.body (file really parsed)',
+        multipart.status === 200 &&
+        deepEqual(multipart.body.body, { assetType: 'campaign' }) &&
+        multipart.body.fileReceived === true,
+        `status=${multipart.status} body=${JSON.stringify(multipart.body.body)} file=${String(multipart.body.fileReceived)}`,
+    );
+
+    const multipartMissing = await postMultipart(`${url}/media/upload`, {});
+    check(
+        'media: multipart upload with no assetType is rejected — proves the after-multer ordering works',
+        multipartMissing.status === 400 && multipartMissing.body.message === MEDIA_ASSET_TYPE_MESSAGE,
+        `status=${multipartMissing.status} message=${String(multipartMissing.body.message)}`,
+    );
+
+    const multipartExtra = await postMultipart(`${url}/media/upload`, {
+        assetType: 'product',
+        folder: '/evil',
+    });
+    check(
+        'media: multipart unknown field is stripped',
+        multipartExtra.status === 200 && deepEqual(multipartExtra.body.body, { assetType: 'product' }),
+        `status=${multipartExtra.status} body=${JSON.stringify(multipartExtra.body.body)}`,
+    );
+};
+
 const checkStripUnit = (): void => {
     console.log('\n=== 5. stripMongoOperatorsFrom() unit checks ===');
 
@@ -1509,6 +1668,66 @@ const checkValidatedRoutes = (): void => {
     }
 };
 
+/**
+ * Media is the one route where `validate()` must NOT come first.
+ *
+ * `POST /api/media/images` is `multipart/form-data`, so `req.body` only exists
+ * after multer has parsed the request. Validating before `handleSingleUpload`
+ * would read `assetType === undefined` and reject every upload — a total outage of
+ * the admin image pipeline that no schema-level test could catch.
+ */
+const MEDIA_UPLOAD_ROUTE = {
+    file: 'media/media.routes.ts',
+    method: 'post',
+    path: '/images',
+    controller: 'mediaController',
+};
+
+const checkMediaValidateFollowsMulter = (): void => {
+    console.log('\n=== 7b. media: validate() runs AFTER multer ===');
+
+    const label = 'POST /api/media/images';
+    const failureMessage = `media route ${label} must validate AFTER handleSingleUpload — multer populates req.body for a multipart request, so a check before it would reject every upload with a missing assetType`;
+
+    const source = readFileSync(join(__dirname, '..', 'src', MEDIA_UPLOAD_ROUTE.file), 'utf8');
+    const registration = parseRouterRegistrations(source).find(
+        (route) => route.method === MEDIA_UPLOAD_ROUTE.method && route.path === MEDIA_UPLOAD_ROUTE.path,
+    );
+
+    if (!registration) {
+        console.log(`  FAIL ${failureMessage}`);
+        console.log(`       (no POST '/images' registration found in ${MEDIA_UPLOAD_ROUTE.file})`);
+        failures.push(failureMessage);
+        return;
+    }
+
+    const argumentsAfterPath = registration.args.slice(
+        registration.args.indexOf("'", registration.args.indexOf("'") + 1) + 1,
+    );
+    const multerIndex = argumentsAfterPath.indexOf('handleSingleUpload');
+    const validateIndex = argumentsAfterPath.indexOf('validate(');
+    const controllerIndex = argumentsAfterPath.indexOf(MEDIA_UPLOAD_ROUTE.controller);
+
+    const ordered =
+        multerIndex !== -1 &&
+        validateIndex !== -1 &&
+        multerIndex < validateIndex &&
+        validateIndex < controllerIndex;
+
+    if (ordered) {
+        console.log(
+            `  OK   ${label}: handleSingleUpload (${multerIndex}) runs before validate() (${validateIndex}), which runs before the controller (${controllerIndex})`,
+        );
+        return;
+    }
+
+    console.log(`  FAIL ${failureMessage}`);
+    console.log(
+        `       (multer at ${multerIndex}, validate() at ${validateIndex}, controller at ${controllerIndex})`,
+    );
+    failures.push(failureMessage);
+};
+
 const main = async (): Promise<void> => {
     const server = await startServer(buildApp());
     const url = baseUrl(server);
@@ -1522,6 +1741,7 @@ const main = async (): Promise<void> => {
         await checkAddressSchemas(url);
         await checkWishlistSchema(url);
         await checkInventorySchemas(url);
+        await checkMediaSchema(url);
     } finally {
         await new Promise<void>((resolve) => {
             server.close(() => resolve());
@@ -1531,6 +1751,7 @@ const main = async (): Promise<void> => {
     checkStripUnit();
     checkAuthRoutesValidateFirst();
     checkValidatedRoutes();
+    checkMediaValidateFollowsMulter();
 
     console.log('\n=== Result ===');
 

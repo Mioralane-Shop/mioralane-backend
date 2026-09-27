@@ -1,8 +1,10 @@
 import { NextFunction, Request, RequestHandler, Response, Router } from 'express';
 import multer from 'multer';
 import { adminGuard } from '../middleware/auth.middleware';
+import { validate } from '../middleware/validate.middleware';
 import { ImageKitService } from '../imagekit/imagekit.service';
 import { MediaController } from './media.controller';
+import { mediaUploadSchema } from './media.schemas';
 
 const MAX_MEDIA_UPLOAD_SIZE_BYTES = 8 * 1024 * 1024;
 
@@ -68,6 +70,10 @@ router.use('/images', ...adminGuard);
 router.post(
   '/images',
   handleSingleUpload,
+  // MUST stay after handleSingleUpload: multer is what populates req.body for a
+  // multipart request, so validating before it would reject every upload with a
+  // missing assetType. The message keeps the route's exact legacy 400 wording.
+  validate({ body: mediaUploadSchema, message: 'assetType must be product, combo, or campaign' }),
   (req: Request, res: Response, next: NextFunction) => {
     void mediaController.uploadImage(req, res).catch(next);
   }
