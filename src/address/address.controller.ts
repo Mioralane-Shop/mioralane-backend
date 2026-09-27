@@ -1,7 +1,6 @@
 import { Response } from 'express';
 import { AuthenticatedRequest } from '../middleware/auth.middleware';
 import {
-    AddressPayload,
     createCustomerAddress,
     deleteCustomerAddress,
     findOwnedAddress,
@@ -9,6 +8,7 @@ import {
     setCustomerDefaultAddress,
     updateCustomerAddress,
 } from './address.service';
+import type { CreateAddressInput, UpdateAddressInput } from './address.schemas';
 import {
     buildActivityChanges,
     pickActivitySnapshot,
@@ -77,7 +77,7 @@ export const createMyAddress = async (
     res: Response
 ): Promise<void> => {
     try {
-        const address = await createCustomerAddress(req.user.id, req.body as AddressPayload);
+        const address = await createCustomerAddress(req.user.id, req.body as CreateAddressInput);
         const plain = address.toObject();
 
         await recordActivity(req, {
@@ -116,7 +116,7 @@ export const updateMyAddress = async (
         const address = await updateCustomerAddress(
             req.user.id,
             addressId,
-            req.body as AddressPayload
+            req.body as UpdateAddressInput
         );
 
         const changes = buildActivityChanges(beforeSnapshot, addressAuditSnapshot(address.toObject()));

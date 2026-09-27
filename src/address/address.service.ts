@@ -1,23 +1,9 @@
 import mongoose from 'mongoose';
 import { Address, IAddressDocument } from './address.model';
 import { validateAndNormalizeShippingAddress } from '../shipping/shipping.service';
+import type { CreateAddressInput, UpdateAddressInput } from './address.schemas';
 
 type HttpError = Error & { statusCode?: number; code?: string };
-
-/** Payload accepted by the address book endpoints. */
-export type AddressPayload = {
-    name?: string;
-    phone?: string;
-    division?: string;
-    district?: string;
-    area?: string;
-    thana?: string;
-    fullAddress?: string;
-    address?: string;
-    detailedAddress?: string;
-    landmark?: string;
-    isDefault?: boolean | string;
-};
 
 const createAddressError = (statusCode: number, message: string, code?: string): HttpError => {
     const error = new Error(message) as HttpError;
@@ -55,7 +41,10 @@ type AddressFieldFallback = {
  * shared shipping validator so the address book uses the exact same
  * field/phone/zone rules as checkout.
  */
-const normalizeAddressPayload = (payload: AddressPayload | undefined, fallback: AddressFieldFallback) => {
+const normalizeAddressPayload = (
+    payload: CreateAddressInput | UpdateAddressInput | undefined,
+    fallback: AddressFieldFallback
+) => {
     const fullAddress =
         readString(payload?.fullAddress) ?? readString(payload?.detailedAddress) ?? readString(payload?.address);
 
@@ -101,7 +90,7 @@ export const listCustomerAddresses = async (userId: string): Promise<IAddressDoc
 
 export const createCustomerAddress = async (
     userId: string,
-    payload: AddressPayload | undefined
+    payload: CreateAddressInput | undefined
 ): Promise<IAddressDocument> => {
     const normalized = normalizeAddressPayload(payload, {});
     const existingCount = await Address.countDocuments({ user: userId });
@@ -130,7 +119,7 @@ export const createCustomerAddress = async (
 export const updateCustomerAddress = async (
     userId: string,
     addressId: string,
-    payload: AddressPayload | undefined
+    payload: UpdateAddressInput | undefined
 ): Promise<IAddressDocument> => {
     const address = await findOwnedAddress(userId, addressId);
 

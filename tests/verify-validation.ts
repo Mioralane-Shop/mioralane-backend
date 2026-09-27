@@ -50,6 +50,8 @@ import {
     MAX_REVIEW_LENGTH,
     createReviewSchema,
 } from '../src/review/review.schemas';
+import { createAddressSchema, updateAddressSchema } from '../src/address/address.schemas';
+import { createMyAddress } from '../src/address/address.controller';
 import type { AuthenticatedRequest } from '../src/middleware/auth.middleware';
 
 type Json = unknown;
@@ -217,6 +219,19 @@ const buildApp = (): express.Application => {
 
     // Review schema (P0-3.4).
     app.post('/review/create', validate({ body: createReviewSchema }), echo);
+
+    // Address schemas (P0-3.5). `/address/create-real` runs the real controller
+    // behind a stubbed req.user so its own "Shipping name, phone, ... are
+    // required" 400 is exercised; `validateAndNormalizeShippingAddress` throws
+    // before the first database call, so only DB-free payloads are sent there.
+    app.post('/address/create', validate({ body: createAddressSchema }), echo);
+    app.post('/address/update', validate({ body: updateAddressSchema }), echo);
+    app.post(
+        '/address/create-real',
+        stubAuth,
+        validate({ body: createAddressSchema }),
+        createMyAddress,
+    );
 
     // Everything below passes through the global operator strip first.
     app.use(stripMongoOperators);
@@ -664,6 +679,122 @@ const checkReviewSchema = async (url: string): Promise<void> => {
     );
 };
 
+/**
+ * The exact wire payload `address.service.ts:15-21` sends for create, i.e.
+ * `SavedAddressPayload`. `deliveryZone` is absent on purpose — it is derived
+ * server-side.
+ */
+const validAddress = {
+    name: 'Test Customer',
+    phone: '01700000000',
+    division: 'Dhaka',
+    district: 'Dhaka',
+    area: 'Gulshan',
+    fullAddress: 'House 1, Road 1, Gulshan',
+    isDefault: true,
+};
+
+const checkAddressSchemas = async (url: string): Promise<void> => {
+    console.log('\n=== 4c. address schemas (P0-3.5) ===');
+
+    const valid = await postJson(`${url}/address/create`, validAddress);
+    check(
+        'address: valid create payload passes unchanged',
+        valid.status === 200 && deepEqual(valid.body.body, validAddress),
+        `status=${valid.status} body=${JSON.stringify(valid.body.body)}`,
+    );
+
+    const injectedField = await postJson(`${url}/address/create`, {
+        ...validAddress,
+        district: { $ne: null },
+    });
+    checkValidationEnvelope(
+        'address: operator district is rejected by Zod (was stored as a Mongo operator)',
+        injectedField,
+        VALIDATION_FAILURE_MESSAGE,
+        'body.district',
+    );
+
+    const injectedLandmark = await postJson(`${url}/address/update`, {
+        landmark: { $ne: null },
+    });
+    checkValidationEnvelope(
+        'address: operator landmark is rejected on the update schema too',
+        injectedLandmark,
+        VALIDATION_FAILURE_MESSAGE,
+        'body.landmark',
+    );
+
+    const derivedFields = await postJson(`${url}/address/create`, {
+        ...validAddress,
+        userId: '507f1f77bcf86cd799439012',
+        deliveryZone: 'free',
+        _id: '507f1f77bcf86cd799439013',
+    });
+    const derivedBody = JSON.stringify(derivedFields.body.body);
+    check(
+        'address: userId / deliveryZone / _id are stripped — ownership and zone stay server-derived',
+        derivedFields.status === 200 &&
+        deepEqual(derivedFields.body.body, validAddress) &&
+        !derivedBody.includes('507f1f77bcf86cd799439012') &&
+        !derivedBody.includes('free'),
+        `status=${derivedFields.status} body=${derivedBody}`,
+    );
+
+    const aliasPayload = {
+        name: 'Test Customer',
+        phone: '01700000000',
+        division: 'Dhaka',
+        district: 'Dhaka',
+        thana: 'Gulshan',
+        detailedAddress: 'House 1, Road 1',
+    };
+    const aliases = await postJson(`${url}/address/create`, aliasPayload);
+    check(
+        'address: thana / detailedAddress aliases survive — the schema must not strip them',
+        aliases.status === 200 && deepEqual(aliases.body.body, aliasPayload),
+        `status=${aliases.status} body=${JSON.stringify(aliases.body.body)}`,
+    );
+
+    const partialUpdate = await postJson(`${url}/address/update`, { landmark: 'Near the park' });
+    check(
+        'address: partial update payload validates (the frontend sends Partial<SavedAddressPayload>)',
+        partialUpdate.status === 200 && deepEqual(partialUpdate.body.body, { landmark: 'Near the park' }),
+        `status=${partialUpdate.status} body=${JSON.stringify(partialUpdate.body.body)}`,
+    );
+
+    const stringTrue = await postJson(`${url}/address/create`, {
+        ...validAddress,
+        isDefault: 'true',
+    });
+    check(
+        "address: isDefault 'true' is still accepted (readBoolean() compat), and 'true' is preserved",
+        stringTrue.status === 200 &&
+        (stringTrue.body.body as Record<string, unknown> | undefined)?.isDefault === 'true',
+        `status=${stringTrue.status} isDefault=${JSON.stringify((stringTrue.body.body as Record<string, unknown> | undefined)?.isDefault)}`,
+    );
+
+    const bogusBoolean = await postJson(`${url}/address/create`, {
+        ...validAddress,
+        isDefault: 'yes',
+    });
+    check(
+        "address: isDefault 'yes' is rejected rather than silently read as truthy",
+        bogusBoolean.status === 400,
+        `status=${bogusBoolean.status} message=${String(bogusBoolean.body.message)}`,
+    );
+
+    const missingRequired = await postJson(`${url}/address/create-real`, { landmark: 'Only a landmark' });
+    check(
+        'address: create still returns the shipping validator\'s exact 400 for a payload missing the core fields',
+        missingRequired.status === 400 &&
+        missingRequired.body.message ===
+            'Shipping name, phone, division, district, area/thana, and detailed address are required' &&
+        missingRequired.body.code === 'invalid_shipping_address',
+        `status=${missingRequired.status} message=${String(missingRequired.body.message)} code=${String(missingRequired.body.code)}`,
+    );
+};
+
 const checkStripUnit = (): void => {
     console.log('\n=== 5. stripMongoOperatorsFrom() unit checks ===');
 
@@ -886,6 +1017,25 @@ const REVIEW_VALIDATED_ROUTE = {
     controller: 'createReview',
 };
 
+/**
+ * Address create and update. The controller already cast `req.body` before
+ * P0-3.5, so these assertions keep that cast honest. Note the API is PATCH-only:
+ * there is no PUT route, so there is nothing else to assert.
+ */
+const ADDRESS_CREATE_VALIDATED_ROUTE = {
+    file: 'address/address.routes.ts',
+    method: 'post',
+    path: '/',
+    controller: 'createMyAddress',
+};
+
+const ADDRESS_UPDATE_VALIDATED_ROUTE = {
+    file: 'address/address.routes.ts',
+    method: 'patch',
+    path: '/:id',
+    controller: 'updateMyAddress',
+};
+
 /** Parses `router.<method>('path', ...handlers)` registrations without regex. */
 const parseRouterRegistrations = (
     source: string,
@@ -991,6 +1141,16 @@ const checkValidatedRoutes = (): void => {
         subject: 'review',
         label: 'POST /api/reviews',
     });
+    assertValidateBeforeController({
+        ...ADDRESS_CREATE_VALIDATED_ROUTE,
+        subject: 'address create',
+        label: 'POST /api/addresses',
+    });
+    assertValidateBeforeController({
+        ...ADDRESS_UPDATE_VALIDATED_ROUTE,
+        subject: 'address update',
+        label: 'PATCH /api/addresses/:id',
+    });
 };
 
 const main = async (): Promise<void> => {
@@ -1003,6 +1163,7 @@ const main = async (): Promise<void> => {
         await checkAuthSchemas(url);
         await checkOrderSchema(url);
         await checkReviewSchema(url);
+        await checkAddressSchemas(url);
     } finally {
         await new Promise<void>((resolve) => {
             server.close(() => resolve());
