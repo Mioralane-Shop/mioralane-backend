@@ -63,7 +63,7 @@ import {
     adjustInventoryItem,
     stockInInventoryItem,
 } from '../src/inventory/inventory.controller';
-import { mediaUploadSchema } from '../src/media/media.schemas';
+import { mediaUploadSchema } from '../src/media/media-upload.schemas';
 import type { AuthenticatedRequest } from '../src/middleware/auth.middleware';
 import multer from 'multer';
 

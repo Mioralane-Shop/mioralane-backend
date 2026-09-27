@@ -6,8 +6,9 @@ import type { MediaAssetType } from './media.types';
  * typo here into a compile error and makes it obvious when `MediaAssetType` gains a
  * member (e.g. the currently-disabled `'review'`) without this list being updated.
  *
- * NOTE: this file is `media.schemas.ts`; the Mongoose asset subdocument lives in
- * `media.schema.ts`. The names are one letter apart — check the path when importing.
+ * NOTE: this file is `media-upload.schemas.ts`; the Mongoose asset subdocument lives
+ * in `media.schema.ts`. It was renamed from `media.schemas.ts` (P0-3.8 follow-up) so
+ * the two file names are no longer one letter apart.
  */
 export const MEDIA_ASSET_TYPES = [
     'product',

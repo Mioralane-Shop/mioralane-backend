@@ -4,7 +4,7 @@ import { adminGuard } from '../middleware/auth.middleware';
 import { validate } from '../middleware/validate.middleware';
 import { ImageKitService } from '../imagekit/imagekit.service';
 import { MediaController } from './media.controller';
-import { mediaUploadSchema } from './media.schemas';
+import { mediaUploadSchema } from './media-upload.schemas';
 
 const MAX_MEDIA_UPLOAD_SIZE_BYTES = 8 * 1024 * 1024;
 

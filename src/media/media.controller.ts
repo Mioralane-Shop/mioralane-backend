@@ -15,7 +15,7 @@ import {
 } from '@imagekit/nodejs';
 import { ImageKitService, SupportedImageMimeType } from '../imagekit/imagekit.service';
 import { MediaAssetType } from './media.types';
-import type { MediaUploadInput } from './media.schemas';
+import type { MediaUploadInput } from './media-upload.schemas';
 
 type MulterFile = {
   buffer: Buffer;
