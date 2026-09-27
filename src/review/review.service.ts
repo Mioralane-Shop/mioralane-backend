@@ -6,6 +6,7 @@ import { OrderStatus } from '../enums/order-status.enum';
 // Review images are temporarily disabled.
 // import type { MediaAsset } from '../media/media.types';
 import { Review, ReviewStatus } from './review.model';
+import type { CreateReviewInput } from './review.schemas';
 
 type HttpError = Error & { statusCode?: number; code?: string };
 
@@ -17,8 +18,7 @@ export const REVIEW_SORTS: ReviewSort[] = ['newest', 'highest', 'lowest', 'verif
 // Review images are temporarily disabled.
 // const REVIEW_IMAGE_LIMIT = 3;
 // const REVIEW_IMAGE_FOLDER_PATH = '/mioralane/reviews/';
-const MAX_REVIEW_LENGTH = 2000;
-const MIN_REVIEW_LENGTH = 3;
+// Review bounds now live in `review.schemas.ts` — the layer that enforces them.
 const MAX_PAGE_SIZE = 50;
 
 // Review images are temporarily disabled — restore this helper to re-enable review images.
@@ -307,39 +307,18 @@ export const getReviewEligibility = async (userId: string, productIdRaw: unknown
 /**
  * Creates a pending review. `verifiedPurchase`, `status`, `user` and the linked
  * order are all derived on the server from the order collection.
+ *
+ * The payload shape is guaranteed by `createReviewSchema` (`validate()` runs
+ * before `createReview` in `review.routes.ts`), so the former hand-rolled
+ * productId / rating / comment checks were removed in P0-3.4 as unreachable
+ * dead code. `review.model.ts` keeps its own validators as the database-level
+ * backstop for any future caller that bypasses HTTP.
  */
-export const submitReview = async (userId: string, payload: unknown) => {
-    const body = (payload ?? {}) as Record<string, unknown>;
-
-    const productIdRaw = typeof body.productId === 'string' ? body.productId.trim() : '';
-    if (!isValidObjectId(productIdRaw)) {
-        throw createReviewError(400, 'Invalid product ID', 'invalid_product');
-    }
-
-    const rating = Number(body.rating);
-    if (!Number.isInteger(rating) || rating < 1 || rating > 5) {
-        throw createReviewError(400, 'Rating must be a whole number between 1 and 5', 'invalid_rating');
-    }
-
-    const comment = typeof body.comment === 'string' ? body.comment.trim() : '';
-    if (comment.length < MIN_REVIEW_LENGTH) {
-        throw createReviewError(
-            400,
-            `Review text must be at least ${MIN_REVIEW_LENGTH} characters`,
-            'invalid_comment'
-        );
-    }
-
-    if (comment.length > MAX_REVIEW_LENGTH) {
-        throw createReviewError(
-            400,
-            `Review text cannot exceed ${MAX_REVIEW_LENGTH} characters`,
-            'invalid_comment'
-        );
-    }
+export const submitReview = async (userId: string, payload: CreateReviewInput) => {
+    const { productId: productIdRaw, rating, comment } = payload;
 
     // Review images are temporarily disabled.
-    // const images = normalizeReviewImages(body.images);
+    // const images = normalizeReviewImages(payload.images);
 
     const product = await Product.findById(productIdRaw).select('_id').lean().exec();
     if (!product) {

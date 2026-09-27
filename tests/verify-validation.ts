@@ -46,6 +46,10 @@ import {
     createOrderSchema,
 } from '../src/order/order.schemas';
 import { createOrder } from '../src/order/order.controller';
+import {
+    MAX_REVIEW_LENGTH,
+    createReviewSchema,
+} from '../src/review/review.schemas';
 import type { AuthenticatedRequest } from '../src/middleware/auth.middleware';
 
 type Json = unknown;
@@ -210,6 +214,9 @@ const buildApp = (): express.Application => {
         validate({ body: createOrderSchema }),
         createOrder,
     );
+
+    // Review schema (P0-3.4).
+    app.post('/review/create', validate({ body: createReviewSchema }), echo);
 
     // Everything below passes through the global operator strip first.
     app.use(stripMongoOperators);
@@ -541,6 +548,122 @@ const checkOrderSchema = async (url: string): Promise<void> => {
     );
 };
 
+/**
+ * The exact wire payload `review-form.tsx:135-136` sends: rating is a real
+ * number and the comment is already trimmed client-side.
+ */
+const validReview = {
+    productId: '507f1f77bcf86cd799439011',
+    rating: 5,
+    comment: 'Excellent quality, arrived quickly.',
+};
+
+const checkReviewSchema = async (url: string): Promise<void> => {
+    console.log('\n=== 4b. review schema (P0-3.4) ===');
+
+    const valid = await postJson(`${url}/review/create`, validReview);
+    check(
+        'review: valid payload passes unchanged',
+        valid.status === 200 && deepEqual(valid.body.body, validReview),
+        `status=${valid.status} body=${JSON.stringify(valid.body.body)}`,
+    );
+
+    const injectedProductId = await postJson(`${url}/review/create`, {
+        ...validReview,
+        productId: { $ne: null },
+    });
+    checkValidationEnvelope(
+        'review: operator productId is rejected by Zod (was a CastError → 500)',
+        injectedProductId,
+        VALIDATION_FAILURE_MESSAGE,
+        'body.productId',
+    );
+
+    const malformedProductId = await postJson(`${url}/review/create`, {
+        ...validReview,
+        productId: 'not-an-object-id',
+    });
+    checkValidationEnvelope(
+        'review: non-ObjectId productId is a clean 400',
+        malformedProductId,
+        VALIDATION_FAILURE_MESSAGE,
+        'body.productId',
+    );
+
+    const derivedFields = await postJson(`${url}/review/create`, {
+        ...validReview,
+        status: 'approved',
+        verifiedPurchase: false,
+        userId: '507f1f77bcf86cd799439012',
+        order: '507f1f77bcf86cd799439013',
+        moderatedAt: '2020-01-01T00:00:00.000Z',
+    });
+    check(
+        'review: server-derived status/verifiedPurchase/userId/order/moderatedAt are stripped',
+        derivedFields.status === 200 && deepEqual(derivedFields.body.body, validReview),
+        `status=${derivedFields.status} body=${JSON.stringify(derivedFields.body.body)}`,
+    );
+
+    const withImages = await postJson(`${url}/review/create`, {
+        ...validReview,
+        images: [{ url: 'https://evil.example/x.png', fileId: 'abc', assetType: 'image' }],
+    });
+    const imagesBody = JSON.stringify(withImages.body.body);
+    check(
+        'review: images is stripped — the disabled upload feature cannot be re-enabled from the client',
+        withImages.status === 200 && !imagesBody.includes('images') && !imagesBody.includes('evil.example'),
+        `status=${withImages.status} body=${imagesBody}`,
+    );
+
+    const paddedComment = await postJson(`${url}/review/create`, {
+        ...validReview,
+        comment: '   padded on both sides   ',
+    });
+    const paddedValue = (paddedComment.body.body as Record<string, unknown> | undefined)?.comment;
+    check(
+        "review: comment is trimmed by the schema (replaces the service's removed body.comment.trim())",
+        paddedComment.status === 200 && paddedValue === 'padded on both sides',
+        `status=${paddedComment.status} comment=${JSON.stringify(paddedValue)}`,
+    );
+
+    for (const rating of [0, 6, 2.5, '5', null]) {
+        const response = await postJson(`${url}/review/create`, { ...validReview, rating });
+        check(
+            `review: rating ${JSON.stringify(rating)} is rejected`,
+            response.status === 400,
+            `status=${response.status} message=${String(response.body.message)}`,
+        );
+    }
+
+    const emptyComment = await postJson(`${url}/review/create`, { ...validReview, comment: '' });
+    checkValidationEnvelope(
+        'review: empty comment is rejected',
+        emptyComment,
+        VALIDATION_FAILURE_MESSAGE,
+        'body.comment',
+    );
+
+    const whitespaceComment = await postJson(`${url}/review/create`, {
+        ...validReview,
+        comment: '        ',
+    });
+    check(
+        'review: whitespace-only comment is rejected after trimming',
+        whitespaceComment.status === 400,
+        `status=${whitespaceComment.status} message=${String(whitespaceComment.body.message)}`,
+    );
+
+    const overCapComment = await postJson(`${url}/review/create`, {
+        ...validReview,
+        comment: 'a'.repeat(MAX_REVIEW_LENGTH + 1),
+    });
+    check(
+        `review: comment above the ${MAX_REVIEW_LENGTH}-character cap is rejected`,
+        overCapComment.status === 400,
+        `status=${overCapComment.status} message=${String(overCapComment.body.message)}`,
+    );
+};
+
 const checkStripUnit = (): void => {
     console.log('\n=== 5. stripMongoOperatorsFrom() unit checks ===');
 
@@ -751,6 +874,18 @@ const ORDER_VALIDATED_ROUTE = {
     controller: 'createOrder',
 };
 
+/**
+ * Review reads `req.body as CreateReviewInput` for the same reason, and the
+ * service's own shape checks were deleted in P0-3.4 — so if `validate()` is
+ * removed from this route, malformed input reaches Mongoose unchecked.
+ */
+const REVIEW_VALIDATED_ROUTE = {
+    file: 'review/review.routes.ts',
+    method: 'post',
+    path: '/',
+    controller: 'createReview',
+};
+
 /** Parses `router.<method>('path', ...handlers)` registrations without regex. */
 const parseRouterRegistrations = (
     source: string,
@@ -795,22 +930,35 @@ const parseRouterRegistrations = (
     return routes;
 };
 
-const checkOrderRouteValidated = (): void => {
-    console.log('\n=== 7. order route keeps validate() before the controller ===');
+type ValidatedRouteSpec = {
+    file: string;
+    method: string;
+    path: string;
+    controller: string;
+    /** Used in the failure message, e.g. `order route POST /api/orders lost ...`. */
+    subject: string;
+    /** Human-readable label for log output. */
+    label: string;
+};
 
-    const source = readFileSync(join(__dirname, '..', 'src', ORDER_VALIDATED_ROUTE.file), 'utf8');
+/**
+ * Asserts `validate()` is registered ahead of the controller by parsing the real
+ * route file. Order and review are both included because both controllers cast
+ * `req.body`, so a missing middleware turns the cast into a lie.
+ */
+const assertValidateBeforeController = (spec: ValidatedRouteSpec): void => {
+    const source = readFileSync(join(__dirname, '..', 'src', spec.file), 'utf8');
     const registration = parseRouterRegistrations(source).find(
-        (route) =>
-            route.method === ORDER_VALIDATED_ROUTE.method &&
-            route.path === ORDER_VALIDATED_ROUTE.path,
+        (route) => route.method === spec.method && route.path === spec.path,
     );
 
-    const label = `POST /api/orders`;
-    const failureMessage = `order route ${label} lost its validate() middleware — the controller trusts the parsed body and will 500 on malformed input`;
+    const failureMessage = `${spec.subject} route ${spec.label} lost its validate() middleware — the controller trusts the parsed body and will 500 on malformed input`;
 
     if (!registration) {
         console.log(`  FAIL ${failureMessage}`);
-        console.log(`       (no POST '/' registration found in ${ORDER_VALIDATED_ROUTE.file})`);
+        console.log(
+            `       (no ${spec.method.toUpperCase()} '${spec.path}' registration found in ${spec.file})`,
+        );
         failures.push(failureMessage);
         return;
     }
@@ -818,18 +966,31 @@ const checkOrderRouteValidated = (): void => {
     const quoteEnd = registration.args.indexOf("'", registration.args.indexOf("'") + 1);
     const afterPath = registration.args.slice(quoteEnd + 1);
     const validateIndex = afterPath.indexOf('validate(');
-    const controllerIndex = afterPath.indexOf(ORDER_VALIDATED_ROUTE.controller);
+    const controllerIndex = afterPath.indexOf(spec.controller);
 
     if (validateIndex !== -1 && (controllerIndex === -1 || validateIndex < controllerIndex)) {
-        console.log(`  OK   ${label}: validate() runs before ${ORDER_VALIDATED_ROUTE.controller}`);
+        console.log(`  OK   ${spec.label}: validate() runs before ${spec.controller}`);
         return;
     }
 
     console.log(`  FAIL ${failureMessage}`);
-    console.log(
-        `       (validate() at ${validateIndex}, ${ORDER_VALIDATED_ROUTE.controller} at ${controllerIndex})`,
-    );
+    console.log(`       (validate() at ${validateIndex}, ${spec.controller} at ${controllerIndex})`);
     failures.push(failureMessage);
+};
+
+const checkValidatedRoutes = (): void => {
+    console.log('\n=== 7. validate() runs before the controller that casts req.body ===');
+
+    assertValidateBeforeController({
+        ...ORDER_VALIDATED_ROUTE,
+        subject: 'order',
+        label: 'POST /api/orders',
+    });
+    assertValidateBeforeController({
+        ...REVIEW_VALIDATED_ROUTE,
+        subject: 'review',
+        label: 'POST /api/reviews',
+    });
 };
 
 const main = async (): Promise<void> => {
@@ -841,6 +1002,7 @@ const main = async (): Promise<void> => {
         await checkGlobalStripLayer(url);
         await checkAuthSchemas(url);
         await checkOrderSchema(url);
+        await checkReviewSchema(url);
     } finally {
         await new Promise<void>((resolve) => {
             server.close(() => resolve());
@@ -849,7 +1011,7 @@ const main = async (): Promise<void> => {
 
     checkStripUnit();
     checkAuthRoutesValidateFirst();
-    checkOrderRouteValidated();
+    checkValidatedRoutes();
 
     console.log('\n=== Result ===');
 

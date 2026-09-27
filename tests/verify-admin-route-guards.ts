@@ -26,6 +26,14 @@
  *     into a regression net. Counts are per file and exact — if an intentional
  *     refactor moves one of these, update the entry below.
  *
+ *  B2. Relocated-guard canary. P0-3.4 deleted `submitReview`'s hand-rolled
+ *     `isValidObjectId(productId)` check, which made the check B count for
+ *     `review.service.ts` drop from 6 to 5. The guarantee was moved, not
+ *     dropped — it now lives in `createReviewSchema`'s 24-hex pattern enforced
+ *     by `validate()`. Check B cannot see that coupling, so it is asserted
+ *     explicitly here. If either half is removed, the ObjectId guard on review
+ *     submission is genuinely gone and this check fails.
+ *
  *  C. Guard-chain runtime contract. Proves `adminGuard` holds the original
  *     `protect`/`adminOnly` function references (no wrapper), and that
  *     registering an async handler through a spread array still lets Express 5
@@ -592,8 +600,11 @@ const OBJECT_ID_CANARIES: Canary[] = [
     {
         file: 'review/review.service.ts',
         pattern: /!isValidObjectId\(/g,
-        min: 6,
-        note: 'admin review id + :productId handlers',
+        // Was 6 until P0-3.4. `submitReview`'s own productId check was deleted as
+        // unreachable dead code once `validate()` ran first; see
+        // ZOD_OBJECT_ID_CANARIES, which proves the guard moved rather than vanished.
+        min: 5,
+        note: 'admin review id + :productId handlers (submitReview now via Zod)',
     },
     {
         file: 'activity-log/activity-log.service.ts',
@@ -643,6 +654,48 @@ const checkObjectIdCanary = (): void => {
     }
 
     console.log(`  total :id guard sites: ${total}`);
+};
+
+/**
+ * Check B2 — guards that P0-3.x moved out of a service body and into a Zod
+ * schema. Each entry is only meaningful together with the others: the schema's
+ * pattern without the `validate()` wiring does nothing, and the wiring without
+ * the pattern validates nothing.
+ */
+const ZOD_OBJECT_ID_CANARIES: Canary[] = [
+    {
+        file: 'review/review.schemas.ts',
+        // Matches the literal `/^[0-9a-fA-F]{24}$/` source text, not a negated class.
+        pattern: /\^\[0-9a-fA-F\]\{24\}/g,
+        min: 1,
+        note: 'createReviewSchema.productId 24-hex pattern',
+    },
+    {
+        file: 'review/review.routes.ts',
+        pattern: /validate\(\{\s*body:\s*createReviewSchema\s*\}\)/g,
+        min: 1,
+        note: 'validate() actually wired to createReviewSchema',
+    },
+];
+
+const checkZodObjectIdCanary = (): void => {
+    console.log(`\n=== B2. relocated ObjectId guards (${ZOD_OBJECT_ID_CANARIES.length} files) ===`);
+
+    for (const canary of ZOD_OBJECT_ID_CANARIES) {
+        const source = readCode(join(SRC_DIR, canary.file));
+        const found = source.match(canary.pattern)?.length ?? 0;
+        const ok = found >= canary.min;
+
+        console.log(
+            `  ${ok ? 'OK  ' : 'FAIL'} ${canary.file.padEnd(46)} ${found}/${canary.min} — ${canary.note}`,
+        );
+
+        if (!ok) {
+            fail(
+                `Relocated ObjectId guard missing: ${canary.file} has ${found} of ${canary.min} expected (${canary.note})`,
+            );
+        }
+    }
 };
 
 /** Check C — guard chain identity + Express 5 async rejection forwarding. */
@@ -744,6 +797,7 @@ const main = async (): Promise<void> => {
     checkAdminGuardCoverage(routers);
     checkNonAdminMountedGuardCoverage(routers);
     checkObjectIdCanary();
+    checkZodObjectIdCanary();
     await checkGuardChainRuntime();
 
     console.log('\n=== Result ===');

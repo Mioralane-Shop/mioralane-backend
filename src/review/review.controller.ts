@@ -6,6 +6,7 @@ import {
     getReviewEligibility,
     submitReview,
 } from './review.service';
+import type { CreateReviewInput } from './review.schemas';
 
 const respondWithError = (
     res: Response,
@@ -26,7 +27,7 @@ export const createReview = async (
     res: Response
 ): Promise<void> => {
     try {
-        const review = await submitReview(req.user.id, req.body);
+        const review = await submitReview(req.user.id, req.body as CreateReviewInput);
         res.status(201).json({ success: true, review });
     } catch (error) {
         respondWithError(res, error, 'Unable to submit review', 'review_submit_failed');
