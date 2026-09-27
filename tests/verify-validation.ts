@@ -64,6 +64,12 @@ import {
     stockInInventoryItem,
 } from '../src/inventory/inventory.controller';
 import { mediaUploadSchema } from '../src/media/media-upload.schemas';
+import {
+    createCampaignSchema,
+    createCouponSchema,
+    updateCampaignSchema,
+    updateCouponSchema,
+} from '../src/promotion/promotion.schemas';
 import type { AuthenticatedRequest } from '../src/middleware/auth.middleware';
 import multer from 'multer';
 
@@ -304,6 +310,14 @@ const buildApp = (): express.Application => {
         echoMultipart,
     );
 
+    // Promotion schemas (P0-3.9). Four mutations, four schemas: create requires the
+    // fields the models mark `required`, update is a partial patch (the handlers
+    // use `.set(body)`).
+    app.post('/promotion/campaign', validate({ body: createCampaignSchema }), echo);
+    app.put('/promotion/campaign', validate({ body: updateCampaignSchema }), echo);
+    app.post('/promotion/coupon', validate({ body: createCouponSchema }), echo);
+    app.put('/promotion/coupon', validate({ body: updateCouponSchema }), echo);
+
     // Everything below passes through the global operator strip first.
     app.use(stripMongoOperators);
 
@@ -333,9 +347,13 @@ const baseUrl = (server: Server): string => {
 
 type ApiResponse = { status: number; body: Record<string, unknown> };
 
-const postJson = async (url: string, payload: Json): Promise<ApiResponse> => {
+const sendJson = async (
+    method: 'POST' | 'PUT',
+    url: string,
+    payload: Json,
+): Promise<ApiResponse> => {
     const response = await fetch(url, {
-        method: 'POST',
+        method,
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
         signal: AbortSignal.timeout(5000),
@@ -343,6 +361,13 @@ const postJson = async (url: string, payload: Json): Promise<ApiResponse> => {
 
     return { status: response.status, body: (await response.json()) as Record<string, unknown> };
 };
+
+const postJson = async (url: string, payload: Json): Promise<ApiResponse> =>
+    sendJson('POST', url, payload);
+
+/** The promotion and campaign/coupon updates are PUTs, not POSTs. */
+const putJson = async (url: string, payload: Json): Promise<ApiResponse> =>
+    sendJson('PUT', url, payload);
 
 const getJson = async (url: string): Promise<ApiResponse> => {
     const response = await fetch(url, { signal: AbortSignal.timeout(5000) });
@@ -1249,6 +1274,331 @@ const checkMediaSchema = async (url: string): Promise<void> => {
     );
 };
 
+/** The shape `campaign-form.tsx:110-118` sends (it also spreads the whole fetched doc). */
+const validCampaignCreate = {
+    name: 'Eid Sale',
+    campaignType: 'automatic_discount',
+    status: 'draft',
+    discount: { type: 'percentage', value: 15 },
+    schedule: {
+        startDate: '2026-01-01T00:00:00.000Z',
+        endDate: '2026-01-31T00:00:00.000Z',
+    },
+};
+
+/** The shape `coupon-form.tsx:65-70` sends (code as typed; the schema normalises it). */
+const validCouponCreate = {
+    code: 'save10',
+    discountType: 'percentage',
+    discountValue: 10,
+    startDate: '2026-01-01T00:00:00.000Z',
+    expiryDate: '2026-01-31T00:00:00.000Z',
+    isActive: true,
+};
+
+/** What `validCouponCreate` becomes after the code transform. */
+const normalizedCouponCreate = { ...validCouponCreate, code: 'SAVE10' };
+
+const checkPromotionSchemas = async (url: string): Promise<void> => {
+    console.log('\n=== 4g. promotion schemas (P0-3.9) ===');
+
+    /* ── campaign: the happy path ───────────────────────────────────────────── */
+
+    const validCampaign = await postJson(`${url}/promotion/campaign`, validCampaignCreate);
+    check(
+        'campaign: valid create payload passes unchanged',
+        validCampaign.status === 200 && deepEqual(validCampaign.body.body, validCampaignCreate),
+        `status=${validCampaign.status} body=${JSON.stringify(validCampaign.body.body)}`,
+    );
+
+    /* ── campaign: mass assignment ──────────────────────────────────────────── */
+
+    const campaignMassAssignment = await postJson(`${url}/promotion/campaign`, {
+        ...validCampaignCreate,
+        _id: '507f1f77bcf86cd799439011',
+        id: '507f1f77bcf86cd799439012',
+        __v: 1,
+        createdAt: '2020-01-01T00:00:00.000Z',
+        updatedAt: '2020-01-01T00:00:00.000Z',
+        publishedAt: '2020-01-01T00:00:00.000Z',
+        runtimeStatus: 'active',
+        createdBy: '507f1f77bcf86cd799439013',
+        createdByAdmin: true,
+        role: 'admin',
+    });
+    const campaignMassBody = JSON.stringify(campaignMassAssignment.body.body);
+    check(
+        'campaign: _id/id/__v/createdAt/updatedAt/publishedAt/runtimeStatus/createdBy/role are all stripped',
+        campaignMassAssignment.status === 200 &&
+        deepEqual(campaignMassAssignment.body.body, validCampaignCreate) &&
+        !campaignMassBody.includes('publishedAt') &&
+        !campaignMassBody.includes('createdBy') &&
+        !campaignMassBody.includes('2020-01-01'),
+        `status=${campaignMassAssignment.status} body=${campaignMassBody}`,
+    );
+
+    /* ── campaign: enums ────────────────────────────────────────────────────── */
+
+    const campaignEnumCases: Array<[string, unknown]> = [
+        ['campaignType', 'bogus_campaign'],
+        ['status', 'archived'],
+    ];
+    for (const [field, value] of campaignEnumCases) {
+        const response = await postJson(`${url}/promotion/campaign`, {
+            ...validCampaignCreate,
+            [field]: value,
+        });
+        check(
+            `campaign: ${field} '${String(value)}' is rejected`,
+            response.status === 400,
+            `status=${response.status} message=${String(response.body.message)}`,
+        );
+    }
+
+    const campaignNestedEnumCases: Array<[string, Record<string, unknown>]> = [
+        ['discount.type', { ...validCampaignCreate.discount, type: 'bogus' }],
+        [
+            'popup.actionType',
+            { enabled: true, actionType: 'bogus' },
+        ],
+        ['eligibility.appliesTo', { appliesTo: 'bogus' }],
+    ];
+    for (const [label, nestedValue] of campaignNestedEnumCases) {
+        const [group] = label.split('.');
+        const response = await postJson(`${url}/promotion/campaign`, {
+            ...validCampaignCreate,
+            [group]: nestedValue,
+        });
+        check(
+            `campaign: ${label} bogus value is rejected`,
+            response.status === 400,
+            `status=${response.status} message=${String(response.body.message)}`,
+        );
+    }
+
+    /* ── campaign: numeric shapes ───────────────────────────────────────────── */
+
+    const campaignNumericCases: Array<[string, Record<string, unknown>]> = [
+        ['priority -1', { priority: -1 }],
+        ['discount.value -5', { discount: { type: 'percentage', value: -5 } }],
+        ['discount.minimumOrderValue -1', { discount: { type: 'fixed', value: 50, minimumOrderValue: -1 } }],
+        ['usageLimits.totalUsageLimit 0', { usageLimits: { totalUsageLimit: 0 } }],
+        ['usageLimits.perCustomerUsageLimit 2.5', { usageLimits: { perCustomerUsageLimit: 2.5 } }],
+    ];
+    for (const [label, patch] of campaignNumericCases) {
+        const response = await postJson(`${url}/promotion/campaign`, {
+            ...validCampaignCreate,
+            ...patch,
+        });
+        check(
+            `campaign: ${label} is rejected`,
+            response.status === 400,
+            `status=${response.status} message=${String(response.body.message)}`,
+        );
+    }
+
+    /* ── campaign: injection-shaped nested values ────────────────────────────── */
+
+    const campaignProductIdInjection = await postJson(`${url}/promotion/campaign`, {
+        ...validCampaignCreate,
+        eligibility: { appliesTo: 'products', productIds: [{ $ne: null }] },
+    });
+    checkValidationEnvelope(
+        'campaign: operator value inside eligibility.productIds is rejected',
+        campaignProductIdInjection,
+        VALIDATION_FAILURE_MESSAGE,
+        'body.eligibility.productIds',
+    );
+
+    const campaignCategoryInjection = await postJson(`${url}/promotion/campaign`, {
+        ...validCampaignCreate,
+        eligibility: { appliesTo: 'categories', categories: [{ $ne: null }] },
+    });
+    checkValidationEnvelope(
+        'campaign: operator value inside eligibility.categories is rejected',
+        campaignCategoryInjection,
+        VALIDATION_FAILURE_MESSAGE,
+        'body.eligibility.categories',
+    );
+
+    const campaignCouponIdInjection = await postJson(`${url}/promotion/campaign`, {
+        ...validCampaignCreate,
+        popup: { enabled: true, actionType: 'coupon', couponId: { $ne: null } },
+    });
+    checkValidationEnvelope(
+        'campaign: operator popup.couponId is rejected',
+        campaignCouponIdInjection,
+        VALIDATION_FAILURE_MESSAGE,
+        'body.popup.couponId',
+    );
+
+    /* ── campaign: dates ────────────────────────────────────────────────────── */
+
+    const campaignBadDate = await postJson(`${url}/promotion/campaign`, {
+        ...validCampaignCreate,
+        schedule: { startDate: 'garbage', endDate: '2026-01-31T00:00:00.000Z' },
+    });
+    checkValidationEnvelope(
+        "campaign: an unparseable schedule.startDate is a clean 400 (was a Mongoose CastError)",
+        campaignBadDate,
+        VALIDATION_FAILURE_MESSAGE,
+        'body.schedule.startDate',
+    );
+
+    /* ── campaign: create requires the model's required fields ──────────────── */
+
+    const campaignRequiredCases: Array<[string, Record<string, unknown>]> = [
+        ['name', { name: undefined }],
+        ['campaignType', { campaignType: undefined }],
+        ['schedule', { schedule: undefined }],
+    ];
+    for (const [field, patch] of campaignRequiredCases) {
+        const response = await postJson(`${url}/promotion/campaign`, {
+            ...validCampaignCreate,
+            ...patch,
+        });
+        checkValidationEnvelope(
+            `campaign: create without ${field} is rejected`,
+            response,
+            VALIDATION_FAILURE_MESSAGE,
+            `body.${field}`,
+        );
+    }
+
+    /* ── campaign: update is a partial patch ────────────────────────────────── */
+
+    const campaignPartialUpdate = await putJson(`${url}/promotion/campaign`, {
+        status: 'published',
+    });
+    check(
+        'campaign: update accepts a partial body ({ status: published } alone)',
+        campaignPartialUpdate.status === 200 &&
+        deepEqual(campaignPartialUpdate.body.body, { status: 'published' }),
+        `status=${campaignPartialUpdate.status} body=${JSON.stringify(campaignPartialUpdate.body.body)}`,
+    );
+
+    /* ── coupon: happy path + code normalisation ────────────────────────────── */
+
+    const validCoupon = await postJson(`${url}/promotion/coupon`, validCouponCreate);
+    check(
+        'coupon: valid create payload passes, with code normalised to upper case',
+        validCoupon.status === 200 && deepEqual(validCoupon.body.body, normalizedCouponCreate),
+        `status=${validCoupon.status} body=${JSON.stringify(validCoupon.body.body)}`,
+    );
+
+    const messyCode = await postJson(`${url}/promotion/coupon`, {
+        ...validCouponCreate,
+        code: '  save  10 ',
+    });
+    const messyCodeValue = (messyCode.body.body as Record<string, unknown> | undefined)?.code;
+    check(
+        "coupon: '  save  10 ' is normalised to 'SAVE10' exactly as normalizeCouponCode does",
+        messyCode.status === 200 && messyCodeValue === 'SAVE10',
+        `status=${messyCode.status} code=${JSON.stringify(messyCodeValue)}`,
+    );
+
+    /* ── coupon: mass assignment (usageCount is the important one) ──────────── */
+
+    const couponMassAssignment = await postJson(`${url}/promotion/coupon`, {
+        ...validCouponCreate,
+        usageCount: 0,
+        stats: { totalUses: 0, totalDiscountGiven: 0, uniqueCustomers: 0, remainingUses: null },
+        _id: '507f1f77bcf86cd799439011',
+        id: '507f1f77bcf86cd799439012',
+        __v: 1,
+        createdAt: '2020-01-01T00:00:00.000Z',
+        updatedAt: '2020-01-01T00:00:00.000Z',
+        role: 'admin',
+    });
+    const couponMassBody = JSON.stringify(couponMassAssignment.body.body);
+    check(
+        'coupon: usageCount/stats/_id/id/__v/createdAt/updatedAt/role are all stripped',
+        couponMassAssignment.status === 200 &&
+        deepEqual(couponMassAssignment.body.body, normalizedCouponCreate) &&
+        !couponMassBody.includes('usageCount') &&
+        !couponMassBody.includes('stats') &&
+        !couponMassBody.includes('2020-01-01'),
+        `status=${couponMassAssignment.status} body=${couponMassBody}`,
+    );
+
+    /* ── coupon: shapes ─────────────────────────────────────────────────────── */
+
+    const couponBadType = await postJson(`${url}/promotion/coupon`, {
+        ...validCouponCreate,
+        discountType: 'bogus',
+    });
+    check(
+        'coupon: discountType bogus value is rejected',
+        couponBadType.status === 400,
+        `status=${couponBadType.status} message=${String(couponBadType.body.message)}`,
+    );
+
+    const couponNegativeValue = await postJson(`${url}/promotion/coupon`, {
+        ...validCouponCreate,
+        discountValue: -1,
+    });
+    check(
+        'coupon: negative discountValue is rejected',
+        couponNegativeValue.status === 400,
+        `status=${couponNegativeValue.status} message=${String(couponNegativeValue.body.message)}`,
+    );
+
+    const couponBadExpiry = await postJson(`${url}/promotion/coupon`, {
+        ...validCouponCreate,
+        expiryDate: 'garbage',
+    });
+    checkValidationEnvelope(
+        'coupon: an unparseable expiryDate is a clean 400',
+        couponBadExpiry,
+        VALIDATION_FAILURE_MESSAGE,
+        'body.expiryDate',
+    );
+
+    const couponProductIdInjection = await postJson(`${url}/promotion/coupon`, {
+        ...validCouponCreate,
+        appliesTo: 'products',
+        productIds: [{ $ne: null }],
+    });
+    checkValidationEnvelope(
+        'coupon: operator value inside productIds is rejected',
+        couponProductIdInjection,
+        VALIDATION_FAILURE_MESSAGE,
+        'body.productIds',
+    );
+
+    /* ── coupon: create requires the model's required fields ───────────────── */
+
+    const couponRequiredCases: Array<[string, Record<string, unknown>]> = [
+        ['code', { code: undefined }],
+        ['discountType', { discountType: undefined }],
+        ['discountValue', { discountValue: undefined }],
+        ['startDate', { startDate: undefined }],
+        ['expiryDate', { expiryDate: undefined }],
+    ];
+    for (const [field, patch] of couponRequiredCases) {
+        const response = await postJson(`${url}/promotion/coupon`, {
+            ...validCouponCreate,
+            ...patch,
+        });
+        checkValidationEnvelope(
+            `coupon: create without ${field} is rejected`,
+            response,
+            VALIDATION_FAILURE_MESSAGE,
+            `body.${field}`,
+        );
+    }
+
+    /* ── coupon: update is a partial patch ─────────────────────────────────── */
+
+    const couponPartialUpdate = await putJson(`${url}/promotion/coupon`, { isActive: false });
+    check(
+        'coupon: update accepts a partial body ({ isActive: false } alone)',
+        couponPartialUpdate.status === 200 &&
+        deepEqual(couponPartialUpdate.body.body, { isActive: false }),
+        `status=${couponPartialUpdate.status} body=${JSON.stringify(couponPartialUpdate.body.body)}`,
+    );
+};
+
 const checkStripUnit = (): void => {
     console.log('\n=== 5. stripMongoOperatorsFrom() unit checks ===');
 
@@ -1530,6 +1880,42 @@ const INVENTORY_VALIDATED_ROUTES = [
 }));
 
 /**
+ * The four admin promotion mutations. Campaigns and coupons live on separate
+ * routers, so `routerName` plus method+path is what disambiguates the POST '/' and
+ * PUT '/:id' pairs.
+ */
+const PROMOTION_VALIDATED_ROUTES = [
+    {
+        routerName: 'adminCampaignRoutes',
+        method: 'post',
+        path: '/',
+        controller: 'createCampaign',
+        label: 'POST /api/admin/campaigns',
+    },
+    {
+        routerName: 'adminCampaignRoutes',
+        method: 'put',
+        path: '/:id',
+        controller: 'updateCampaign',
+        label: 'PUT /api/admin/campaigns/:id',
+    },
+    {
+        routerName: 'adminCouponRoutes',
+        method: 'post',
+        path: '/',
+        controller: 'createCoupon',
+        label: 'POST /api/admin/coupons',
+    },
+    {
+        routerName: 'adminCouponRoutes',
+        method: 'put',
+        path: '/:id',
+        controller: 'updateCoupon',
+        label: 'PUT /api/admin/coupons/:id',
+    },
+].map((route) => ({ ...route, file: 'promotion/promotion.routes.ts', subject: 'promotion' }));
+
+/**
  * Parses `<routerName>.<method>('path', ...handlers)` registrations.
  *
  * `routerName` is a parameter because not every router is named `router` — the
@@ -1666,6 +2052,10 @@ const checkValidatedRoutes = (): void => {
     for (const spec of INVENTORY_VALIDATED_ROUTES) {
         assertValidateBeforeController(spec);
     }
+
+    for (const spec of PROMOTION_VALIDATED_ROUTES) {
+        assertValidateBeforeController(spec);
+    }
 };
 
 /**
@@ -1742,6 +2132,7 @@ const main = async (): Promise<void> => {
         await checkWishlistSchema(url);
         await checkInventorySchemas(url);
         await checkMediaSchema(url);
+        await checkPromotionSchemas(url);
     } finally {
         await new Promise<void>((resolve) => {
             server.close(() => resolve());

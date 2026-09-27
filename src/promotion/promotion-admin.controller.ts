@@ -12,6 +12,12 @@ import {
   recordActivity,
   resolveUpdateAction,
 } from '../activity-log/activity-log.service';
+import type {
+  CreateCampaignInput,
+  CreateCouponInput,
+  UpdateCampaignInput,
+  UpdateCouponInput,
+} from './promotion.schemas';
 
 const escapeRegex = (value: string): string => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
@@ -105,7 +111,10 @@ export const getCampaign = async (req: AuthenticatedRequest, res: Response): Pro
 
 export const createCampaign = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
-    const campaign = await PromotionCampaign.create(req.body);
+    // `req.body` is the parsed `createCampaignSchema` output, so server-owned
+    // fields (`publishedAt`, `_id`, `createdAt`, `updatedAt`) can no longer be
+    // injected — previously this line trusted the whole body.
+    const campaign = await PromotionCampaign.create(req.body as CreateCampaignInput);
 
     await recordActivity(req, {
       action: 'CREATE',
@@ -134,7 +143,7 @@ export const updateCampaign = async (req: AuthenticatedRequest, res: Response): 
       return;
     }
     const campaignBeforeEdit = campaign.toObject();
-    campaign.set(req.body);
+    campaign.set(req.body as UpdateCampaignInput);
     await campaign.save();
 
     const campaignChanges = buildActivityChanges(
@@ -255,7 +264,9 @@ export const getCoupon = async (req: AuthenticatedRequest, res: Response): Promi
 
 export const createCoupon = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
-    const coupon = await Coupon.create(req.body);
+    // Server-owned `usageCount` / `_id` / timestamps are stripped by
+    // `createCouponSchema`, so a new coupon always starts from the model default.
+    const coupon = await Coupon.create(req.body as CreateCouponInput);
 
     await recordActivity(req, {
       action: 'CREATE',
@@ -284,7 +295,7 @@ export const updateCoupon = async (req: AuthenticatedRequest, res: Response): Pr
       return;
     }
     const couponBeforeEdit = coupon.toObject();
-    coupon.set(req.body);
+    coupon.set(req.body as UpdateCouponInput);
     await coupon.save();
 
     const couponChanges = buildActivityChanges(
