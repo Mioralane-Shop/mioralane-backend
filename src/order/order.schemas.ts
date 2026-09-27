@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { numericField } from '../common/validation';
+import { numericField } from '../utils/validation';
 
 /** Mongo ObjectId as it appears in payloads. */
 const OBJECT_ID_PATTERN = /^[0-9a-fA-F]{24}$/;
