@@ -5,6 +5,8 @@ export const MEDIA_FOLDER_BY_TYPE: Record<MediaAssetType, string> = {
   product: '/mioralane/products',
   combo: '/mioralane/combos',
   campaign: '/mioralane/campaigns',
+  // Review images are temporarily disabled.
+  // review: '/mioralane/reviews',
 };
 
 export { extractMediaUrls, normalizeMediaAssets };

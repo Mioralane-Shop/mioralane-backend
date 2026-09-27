@@ -5,11 +5,43 @@ import { slugify } from '../utils/slugify';
 import mongoose from 'mongoose';
 import { extractMediaUrls, normalizeMediaAssets } from '../media/media.utils';
 import type { MediaAsset } from '../media/media.types';
+import {
+  describeCastError,
+  sanitizeErrorMessage,
+  sanitizeValidationMessages,
+} from '../middleware/error.middleware';
 import { normalizeOptionalLowStockThreshold } from '../inventory/inventory.service';
+import { applyCatalogStockChange } from '../inventory/inventory-transaction.service';
+import {
+  buildActivityChanges,
+  pickActivitySnapshot,
+  recordActivity,
+  resolveUpdateAction,
+} from '../activity-log/activity-log.service';
+import type {
+  CreateProductInput,
+  ProductArrivalInput,
+  UpdateProductInput,
+} from './product.schemas';
 import {
   getCartCrossSellRecommendations,
   normalizeCrossSellRecommendations,
 } from '../cross-sell/cross-sell.service';
+
+/** Fields kept in activity snapshots — keeps audit rows small and readable. */
+const PRODUCT_AUDIT_FIELDS = [
+  'title',
+  'slug',
+  'brand',
+  'category',
+  'price',
+  'salePrice',
+  'compareAtPrice',
+  'stock',
+  'lowStockThreshold',
+  'availabilityMode',
+  'isActive',
+];
 
 // ─── Types ────────────────────────────────────────────────────────────────
 
@@ -478,7 +510,7 @@ const formatProduct = (product: ProductAggregateRow): ProductAggregateRow => {
  */
 export const createProduct = async (req: Request, res: Response): Promise<void> => {
   try {
-    const body = sanitizeMutationBody((req.body ?? {}) as Record<string, unknown>);
+    const body = sanitizeMutationBody(req.body as CreateProductInput);
     normalizeProductMedia(body);
     normalizeSkincareFields(body);
     normalizeInventoryFields(body);
@@ -491,15 +523,10 @@ export const createProduct = async (req: Request, res: Response): Promise<void> 
       body.crossSellRecommendations = normalizedCrossSellRecommendations;
     }
 
-    // Validate required fields
-  if (!body.title || !body.brand || !body.category || body.price === undefined || body.price === null) {
-      res.status(400).json({
-        success: false,
-        message: 'Missing required fields: title, brand, category, price',
-      });
-      return;
-    }
-
+    // `title`, `brand`, `category` and `price` are guaranteed by
+    // `createProductSchema`, so the former "Missing required fields: title, brand,
+    // category, price" 400 was removed in P0-3.11 as unreachable. The images check
+    // below stays: `images` is optional because a payload may supply `media` only.
     if (!body.images || body.images.length === 0) {
       res.status(400).json({
         success: false,
@@ -521,6 +548,14 @@ export const createProduct = async (req: Request, res: Response): Promise<void> 
     const product = await Product.create({
       ...body,
       slug,
+    });
+
+    await recordActivity(req, {
+      action: 'CREATE',
+      entityType: 'PRODUCT',
+      entityId: product._id.toString(),
+      entityName: product.title,
+      after: pickActivitySnapshot(product.toObject(), PRODUCT_AUDIT_FIELDS),
     });
 
     res.status(201).json({
@@ -568,18 +603,17 @@ export const createProduct = async (req: Request, res: Response): Promise<void> 
       res.status(400).json({
         success: false,
         message: 'Validation failed',
-        errors: [error.path === 'stock' ? 'Stock must be a non-negative integer' : error.message],
+        errors: [describeCastError(error)],
       });
       return;
     }
 
     // Mongoose validation error
     if (error.name === 'ValidationError') {
-      const messages = Object.values(error.errors).map((e: any) => e.message);
       res.status(400).json({
         success: false,
         message: 'Validation failed',
-        errors: messages,
+        errors: sanitizeValidationMessages(error),
       });
       return;
     }
@@ -614,7 +648,10 @@ export const updateProduct = async (req: Request, res: Response): Promise<void> 
       return;
     }
 
-    const body = sanitizeMutationBody((req.body ?? {}) as Record<string, unknown>);
+    // Snapshot before any mutation so the audit trail can diff the edit.
+    const productBeforeEdit = product.toObject();
+
+    const body = sanitizeMutationBody(req.body as UpdateProductInput);
     normalizeProductMedia(body);
     normalizeSkincareFields(body);
     normalizeInventoryFields(body);
@@ -627,18 +664,9 @@ export const updateProduct = async (req: Request, res: Response): Promise<void> 
       body.crossSellRecommendations = normalizedCrossSellRecommendations;
     }
 
-    if (
-      (body.title !== undefined && body.title.trim() === '') ||
-      (body.brand !== undefined && body.brand.trim() === '') ||
-      (body.category !== undefined && body.category.trim() === '')
-    ) {
-      res.status(400).json({
-        success: false,
-        message: 'Title, brand, and category cannot be empty',
-      });
-      return;
-    }
-
+    // The former "Title, brand, and category cannot be empty" 400 was removed in
+    // P0-3.11: `title` / `brand` / `category` are `min(1)` after `.trim()` in the
+    // schema, so an empty string can no longer reach here.
     const nextSlug = resolveSlug(body, product.title);
 
     if (await findDuplicateSlug(nextSlug, id)) {
@@ -653,20 +681,95 @@ export const updateProduct = async (req: Request, res: Response): Promise<void> 
       body.preOrder.reservedQuantity = product.preOrder?.reservedQuantity ?? 0;
     }
 
-    product.set({
-      ...body,
-      slug: nextSlug,
-    });
+    // `stock` is guaranteed to be a non-negative integer by the schema, so no
+    // typeof guard is needed to discover whether the client asked for a change.
+    const requestedStock = body.stock;
 
-    await product.save();
-    await product.populate({
+    // Stock is never written directly: every change goes through the inventory
+    // ledger so the audit trail cannot be bypassed by a catalog edit.
+    delete body.stock;
+
+    const stockChange =
+      requestedStock !== undefined && requestedStock !== product.stock
+        ? { previousStock: product.stock ?? 0, nextStock: requestedStock }
+        : null;
+
+    if (stockChange) {
+      const session = await mongoose.startSession();
+
+      try {
+        await session.withTransaction(async () => {
+          const editable = await Product.findById(id).session(session).exec();
+
+          if (!editable) {
+            throw Object.assign(new Error('Product not found'), { statusCode: 404 });
+          }
+
+          editable.set({
+            ...body,
+            slug: nextSlug,
+          });
+
+          await editable.save({ session });
+
+          await applyCatalogStockChange({
+            itemType: 'product',
+            itemId: id,
+            previousStock: stockChange.previousStock,
+            nextStock: stockChange.nextStock,
+            performedBy: req.user?.id,
+            performedByRole: 'admin',
+            reason: 'Stock updated from the product editor',
+            session,
+          });
+        });
+      } finally {
+        await session.endSession();
+      }
+    } else {
+      product.set({
+        ...body,
+        slug: nextSlug,
+      });
+
+      await product.save();
+    }
+
+    const updatedProduct = await Product.findById(id);
+
+    if (!updatedProduct) {
+      res.status(404).json({
+        success: false,
+        message: 'Product not found',
+      });
+      return;
+    }
+
+    const productChanges = buildActivityChanges(
+      productBeforeEdit,
+      updatedProduct.toObject()
+    );
+
+    if (productChanges.changedFields.length > 0) {
+      await recordActivity(req, {
+        action: resolveUpdateAction(productChanges.changedFields),
+        entityType: 'PRODUCT',
+        entityId: id,
+        entityName: updatedProduct.title,
+        before: productChanges.before,
+        after: productChanges.after,
+        metadata: { changedFields: productChanges.changedFields },
+      });
+    }
+
+    await updatedProduct.populate({
       path: 'crossSellRecommendations.productId',
       select: 'title name images media',
     });
 
     res.status(200).json({
       success: true,
-      product,
+      product: updatedProduct,
     });
   } catch (error: any) {
     if (error?.statusCode) {
@@ -708,17 +811,16 @@ export const updateProduct = async (req: Request, res: Response): Promise<void> 
       res.status(400).json({
         success: false,
         message: 'Validation failed',
-        errors: [error.path === 'stock' ? 'Stock must be a non-negative integer' : error.message],
+        errors: [describeCastError(error)],
       });
       return;
     }
 
     if (error.name === 'ValidationError') {
-      const messages = Object.values(error.errors).map((e: any) => e.message);
       res.status(400).json({
         success: false,
         message: 'Validation failed',
-        errors: messages,
+        errors: sanitizeValidationMessages(error),
       });
       return;
     }
@@ -753,6 +855,28 @@ export const deleteProduct = async (req: Request, res: Response): Promise<void> 
       return;
     }
 
+    // Remove the deleted product from every other product's cross-sell
+    // recommendations so no stale references remain in the database.
+    try {
+      const deletedProductId = new mongoose.Types.ObjectId(id);
+      await Product.updateMany(
+        { 'crossSellRecommendations.productId': deletedProductId },
+        { $pull: { crossSellRecommendations: { productId: deletedProductId } } }
+      );
+    } catch (cleanupError) {
+      // The product is already deleted; the read path tolerates dangling
+      // references, so log the failure instead of reporting a misleading error.
+      console.error('Failed to clean up cross-sell recommendations after deleting product:', cleanupError);
+    }
+
+    await recordActivity(req, {
+      action: 'DELETE',
+      entityType: 'PRODUCT',
+      entityId: id,
+      entityName: product.title,
+      before: pickActivitySnapshot(product.toObject(), PRODUCT_AUDIT_FIELDS),
+    });
+
     res.status(200).json({
       success: true,
       message: 'Product deleted successfully',
@@ -768,24 +892,21 @@ export const deleteProduct = async (req: Request, res: Response): Promise<void> 
 
 export const markPreOrderArrived = async (req: Request, res: Response): Promise<void> => {
   const session = await mongoose.startSession();
+  let stockBeforeArrival: Record<string, unknown> | null = null;
 
   try {
     const { id } = req.params as { id: string };
-    const actualReceivedQuantity = Number(req.body?.actualReceivedQuantity);
+    const { actualReceivedQuantity } = req.body as ProductArrivalInput;
 
     if (!isValidObjectId(id)) {
       res.status(400).json({ success: false, message: 'Invalid product ID' });
       return;
     }
 
-    if (!Number.isInteger(actualReceivedQuantity) || actualReceivedQuantity < 0) {
-      res.status(400).json({
-        success: false,
-        message: 'Actual quantity received must be a non-negative whole number',
-        code: 'invalid_received_quantity',
-      });
-      return;
-    }
+    // The former "Actual quantity received must be a non-negative whole number"
+    // 400 (code `invalid_received_quantity`) was removed in P0-3.11 as unreachable:
+    // `productArrivalSchema` enforces a non-negative integer and keeps the old
+    // `Number()` coercion via `numericField`.
 
     const product = await session.withTransaction(async () => {
       const current = await Product.findById(id).session(session).exec();
@@ -809,6 +930,13 @@ export const markPreOrderArrived = async (req: Request, res: Response): Promise<
         );
       }
 
+      stockBeforeArrival = pickActivitySnapshot(
+        current.toObject(),
+        PRODUCT_AUDIT_FIELDS
+      );
+
+      const previousStock = current.stock ?? 0;
+
       current.stock = actualReceivedQuantity - reservedQuantity;
       current.availabilityMode = 'in_stock';
       current.preOrder = {
@@ -818,7 +946,36 @@ export const markPreOrderArrived = async (req: Request, res: Response): Promise<
       };
 
       await current.save({ session });
+
+      await applyCatalogStockChange({
+        itemType: 'product',
+        itemId: id,
+        previousStock,
+        nextStock: current.stock,
+        transactionType: 'RESTOCK',
+        reason: 'Pre-order stock arrived',
+        performedBy: req.user?.id,
+        performedByRole: 'admin',
+        session,
+      });
+
       return current;
+    });
+
+    const arrivalChanges = buildActivityChanges(
+      stockBeforeArrival,
+      pickActivitySnapshot(product.toObject(), PRODUCT_AUDIT_FIELDS)
+    );
+
+    await recordActivity(req, {
+      action: resolveUpdateAction(arrivalChanges.changedFields),
+      entityType: 'PRODUCT',
+      entityId: id,
+      entityName: product.title,
+      description: `Pre-order stock arrived for product "${product.title}"`,
+      before: arrivalChanges.before,
+      after: arrivalChanges.after,
+      metadata: { changedFields: arrivalChanges.changedFields, actualReceivedQuantity },
     });
 
     res.status(200).json({
@@ -854,7 +1011,7 @@ export const getCartRecommendations = async (req: Request, res: Response): Promi
     const err = error as { statusCode?: number; message?: string; code?: string };
     res.status(err.statusCode ?? 400).json({
       success: false,
-      message: err.message ?? 'Unable to fetch cross-sell recommendations',
+      message: sanitizeErrorMessage(error, 'Unable to fetch cross-sell recommendations'),
       code: err.code ?? 'cross_sell_recommendations_failed',
     });
   }
