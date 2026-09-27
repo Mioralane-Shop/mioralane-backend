@@ -8,7 +8,7 @@ import { z } from 'zod';
  * therefore banned across these schemas; always go through {@link numericField}.
  */
 export const emptyStringToUndefined = (value: unknown): unknown =>
-    value === '' || value === null ? undefined : value;
+  value === '' || value === null ? undefined : value;
 
 /**
  * A number that also accepts a numeric string (`'2'`), matching what the
@@ -19,7 +19,7 @@ export const emptyStringToUndefined = (value: unknown): unknown =>
  * `numericField(z.coerce.number().int().positive().max(999))`.
  */
 export const numericField = (
-    constraints: z.ZodType<number> = z.coerce.number()
+  constraints: z.ZodType<number> = z.coerce.number()
 ): z.ZodType<number> => z.preprocess(emptyStringToUndefined, constraints);
 
 /**

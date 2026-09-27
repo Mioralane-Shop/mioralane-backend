@@ -794,7 +794,7 @@ const checkAddressSchemas = async (url: string): Promise<void> => {
         'address: create still returns the shipping validator\'s exact 400 for a payload missing the core fields',
         missingRequired.status === 400 &&
         missingRequired.body.message ===
-            'Shipping name, phone, division, district, area/thana, and detailed address are required' &&
+        'Shipping name, phone, division, district, area/thana, and detailed address are required' &&
         missingRequired.body.code === 'invalid_shipping_address',
         `status=${missingRequired.status} message=${String(missingRequired.body.message)} code=${String(missingRequired.body.code)}`,
     );
@@ -878,9 +878,16 @@ const checkWishlistSchema = async (url: string): Promise<void> => {
 
     const emptyType = await postJson(`${url}/wishlist/add`, { ...validWishlistAdd, itemType: '' });
     check(
-        "wishlist: itemType '' is still accepted (normalizeWishlistItemType maps it to 'product')",
-        emptyType.status === 200 && (emptyType.body.body as Record<string, unknown> | undefined)?.itemType === '',
-        `status=${emptyType.status} itemType=${JSON.stringify((emptyType.body.body as Record<string, unknown> | undefined)?.itemType)}`,
+        "wishlist: itemType '' is now rejected — P0-3.6a dropped the empty-string tolerance",
+        emptyType.status === 400,
+        `status=${emptyType.status} message=${String(emptyType.body.message)}`,
+    );
+
+    const nullType = await postJson(`${url}/wishlist/add`, { ...validWishlistAdd, itemType: null });
+    check(
+        'wishlist: itemType null is rejected (strict enum, no legacy tolerance)',
+        nullType.status === 400,
+        `status=${nullType.status} message=${String(nullType.body.message)}`,
     );
 
     const withSort = { ...validWishlistAdd, sort: 'price-asc' };

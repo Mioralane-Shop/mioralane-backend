@@ -21,16 +21,19 @@ export const addToWishlistSchema = z
         /** Legacy field name still accepted by `readWishlistTarget`. */
         productId: z.string().regex(OBJECT_ID_PATTERN, 'A valid itemId is required').optional(),
         /**
-         * Mirrors the accepted set of `normalizeWishlistItemType` exactly: `'combo'`,
-         * `'product'`, or the "absent" spellings `''` / `null` (which it maps to
-         * `'product'`). Anything else is rejected — previously by the service with
-         * `invalid_item_type`, now here. The accepted set is unchanged; only the
-         * rejection payload moves from the service message to the standard envelope.
+         * Strict, matching `z.enum(['product', 'combo'])` in `order.schemas.ts` so the
+         * same catalog concept is not enforced differently per module.
          *
-         * Matches `z.enum(['product', 'combo'])` in `order.schemas.ts` so the same
-         * catalog concept is not enforced differently per module.
+         * P0-3.6a tightened this from a union that also tolerated `''` / `null`
+         * (which `normalizeWishlistItemType` maps to `'product'`). No client sends
+         * those spellings — that tolerance was legacy defensive code — and a strict
+         * enum means a bogus value can never reach the service at all.
+         *
+         * `normalizeWishlistItemType` is NOT dead as a result: the
+         * `DELETE /:itemId?itemType=` query path still calls it (`wishlist.controller.ts`),
+         * and that path is validated in a later params/query sweep.
          */
-        itemType: z.union([z.enum(['product', 'combo']), z.literal(''), z.null()]).optional(),
+        itemType: z.enum(['product', 'combo']).optional(),
         /**
          * Shape-only: `req.body.sort` is read by both handlers, and
          * `normalizeWishlistSort` owns the value semantics (including its
