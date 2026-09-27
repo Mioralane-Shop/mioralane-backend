@@ -1,5 +1,6 @@
 import { Response } from 'express';
 import { AuthenticatedRequest } from '../middleware/auth.middleware';
+import { sanitizeErrorMessage } from '../middleware/error.middleware';
 import {
     createCustomerAddress,
     deleteCustomerAddress,
@@ -52,7 +53,7 @@ const respondWithError = (
     const err = error as { statusCode?: number; message?: string; code?: string };
     res.status(err.statusCode ?? 400).json({
         success: false,
-        message: err.message ?? fallbackMessage,
+        message: sanitizeErrorMessage(error, fallbackMessage),
         code: err.code ?? fallbackCode,
     });
 };

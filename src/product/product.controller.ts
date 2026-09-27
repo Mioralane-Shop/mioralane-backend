@@ -5,6 +5,11 @@ import { slugify } from '../utils/slugify';
 import mongoose from 'mongoose';
 import { extractMediaUrls, normalizeMediaAssets } from '../media/media.utils';
 import type { MediaAsset } from '../media/media.types';
+import {
+  describeCastError,
+  sanitizeErrorMessage,
+  sanitizeValidationMessages,
+} from '../middleware/error.middleware';
 import { normalizeOptionalLowStockThreshold } from '../inventory/inventory.service';
 import { applyCatalogStockChange } from '../inventory/inventory-transaction.service';
 import {
@@ -598,18 +603,17 @@ export const createProduct = async (req: Request, res: Response): Promise<void> 
       res.status(400).json({
         success: false,
         message: 'Validation failed',
-        errors: [error.path === 'stock' ? 'Stock must be a non-negative integer' : error.message],
+        errors: [describeCastError(error)],
       });
       return;
     }
 
     // Mongoose validation error
     if (error.name === 'ValidationError') {
-      const messages = Object.values(error.errors).map((e: any) => e.message);
       res.status(400).json({
         success: false,
         message: 'Validation failed',
-        errors: messages,
+        errors: sanitizeValidationMessages(error),
       });
       return;
     }
@@ -807,17 +811,16 @@ export const updateProduct = async (req: Request, res: Response): Promise<void> 
       res.status(400).json({
         success: false,
         message: 'Validation failed',
-        errors: [error.path === 'stock' ? 'Stock must be a non-negative integer' : error.message],
+        errors: [describeCastError(error)],
       });
       return;
     }
 
     if (error.name === 'ValidationError') {
-      const messages = Object.values(error.errors).map((e: any) => e.message);
       res.status(400).json({
         success: false,
         message: 'Validation failed',
-        errors: messages,
+        errors: sanitizeValidationMessages(error),
       });
       return;
     }
@@ -1008,7 +1011,7 @@ export const getCartRecommendations = async (req: Request, res: Response): Promi
     const err = error as { statusCode?: number; message?: string; code?: string };
     res.status(err.statusCode ?? 400).json({
       success: false,
-      message: err.message ?? 'Unable to fetch cross-sell recommendations',
+      message: sanitizeErrorMessage(error, 'Unable to fetch cross-sell recommendations'),
       code: err.code ?? 'cross_sell_recommendations_failed',
     });
   }

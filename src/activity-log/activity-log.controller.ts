@@ -1,5 +1,6 @@
 import { Response } from 'express';
 import { AuthenticatedRequest } from '../middleware/auth.middleware';
+import { sanitizeErrorMessage } from '../middleware/error.middleware';
 import { ActivityActorType, ActivityAction, ActivityEntityType } from './activity-log.model';
 import {
     getActivityLogById,
@@ -19,7 +20,7 @@ const respondWithActivityError = (res: Response, error: unknown, fallback: strin
 
     res.status((err.statusCode ?? 400) >= 500 ? 500 : err.statusCode ?? 400).json({
         success: false,
-        message: err.message ?? fallback,
+        message: sanitizeErrorMessage(error, fallback),
         code: err.code ?? 'activity_log_request_failed',
     });
 };

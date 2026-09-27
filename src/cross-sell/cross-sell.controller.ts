@@ -1,5 +1,6 @@
 import { Response } from 'express';
 import { AuthenticatedRequest } from '../middleware/auth.middleware';
+import { sanitizeErrorMessage } from '../middleware/error.middleware';
 import { getCrossSellSettings, upsertCrossSellSettings } from './cross-sell.service';
 import type { CrossSellSettingsInput } from './cross-sell.schemas';
 import {
@@ -46,7 +47,7 @@ export const updateAdminCrossSellSettings = async (
     const err = error as { statusCode?: number; message?: string; code?: string };
     res.status(err.statusCode ?? 400).json({
       success: false,
-      message: err.message ?? 'Unable to update cross-sell settings',
+      message: sanitizeErrorMessage(error, 'Unable to update cross-sell settings'),
       code: err.code ?? 'cross_sell_settings_update_failed',
     });
   }

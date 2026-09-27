@@ -2,6 +2,7 @@ import { NextFunction, Request, RequestHandler, Response, Router } from 'express
 import multer from 'multer';
 import { adminGuard } from '../middleware/auth.middleware';
 import { validate } from '../middleware/validate.middleware';
+import { sanitizeErrorMessage } from '../middleware/error.middleware';
 import { ImageKitService } from '../imagekit/imagekit.service';
 import { MediaController } from './media.controller';
 import { mediaUploadSchema } from './media-upload.schemas';
@@ -50,7 +51,7 @@ const handleSingleUpload: RequestHandler = (req, res, next) => {
       return;
     }
 
-    const message = uploadError.message || 'Invalid upload request';
+    const message = sanitizeErrorMessage(uploadError, 'Invalid upload request');
     res.status(400).json({
       success: false,
       message,

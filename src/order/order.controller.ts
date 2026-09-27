@@ -5,6 +5,7 @@ import { Product } from '../product/product.model';
 import { Combo } from '../combo/combo.model';
 import { Order, OrderItemType } from './order.model';
 import { AuthenticatedRequest } from '../middleware/auth.middleware';
+import { sanitizeErrorMessage } from '../middleware/error.middleware';
 import { OrderStatus } from '../enums/order-status.enum';
 import { CouponUsage } from '../promotion/coupon-usage.model';
 import {
@@ -79,7 +80,7 @@ export const createOrder = async (req: AuthenticatedRequest, res: Response): Pro
       const err = error as HttpError;
       res.status(err.statusCode ?? 400).json({
         success: false,
-        message: err.message ?? 'Saved delivery address could not be used',
+        message: sanitizeErrorMessage(error, 'Saved delivery address could not be used'),
         code: err.code ?? 'invalid_address_id',
       });
       return;
@@ -90,10 +91,9 @@ export const createOrder = async (req: AuthenticatedRequest, res: Response): Pro
   try {
     normalizedShippingAddress = validateAndNormalizeShippingAddress(shippingAddressInput);
   } catch (error) {
-    const err = error as HttpError;
     res.status(400).json({
       success: false,
-      message: err.message,
+      message: sanitizeErrorMessage(error, 'Invalid shipping address'),
     });
     return;
   }

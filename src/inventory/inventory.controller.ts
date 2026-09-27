@@ -1,5 +1,6 @@
 import { Response } from 'express';
 import { AuthenticatedRequest } from '../middleware/auth.middleware';
+import { sanitizeErrorMessage } from '../middleware/error.middleware';
 import { getInventorySettings, upsertInventorySettings } from './inventory.service';
 import type { InventorySettingsInput } from './inventory-settings.schemas';
 import {
@@ -60,7 +61,7 @@ export const updateAdminInventorySettings = async (
     const err = error as { statusCode?: number; message?: string; code?: string };
     res.status(err.statusCode ?? 400).json({
       success: false,
-      message: err.message ?? 'Unable to update inventory settings',
+      message: sanitizeErrorMessage(error, 'Unable to update inventory settings'),
       code: err.code ?? 'inventory_settings_update_failed',
     });
   }
@@ -75,7 +76,7 @@ const respondWithInventoryError = (res: Response, error: unknown, fallback: stri
 
   res.status(err.statusCode ?? 500).json({
     success: false,
-    message: err.message ?? fallback,
+    message: sanitizeErrorMessage(error, fallback),
     code: err.code ?? 'inventory_operation_failed',
   });
 };

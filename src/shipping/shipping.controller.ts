@@ -2,6 +2,7 @@ import { Response } from 'express';
 import mongoose from 'mongoose';
 import { Combo } from '../combo/combo.model';
 import { AuthenticatedRequest } from '../middleware/auth.middleware';
+import { sanitizeErrorMessage } from '../middleware/error.middleware';
 import { Product } from '../product/product.model';
 import type { ShippingSettingsInput } from './shipping.schemas';
 import {
@@ -120,7 +121,7 @@ export const quoteShipping = async (req: AuthenticatedRequest, res: Response): P
     const err = error as { statusCode?: number; message?: string; code?: string };
     res.status(err.statusCode ?? 400).json({
       success: false,
-      message: err.message ?? 'Unable to calculate shipping quote',
+      message: sanitizeErrorMessage(error, 'Unable to calculate shipping quote'),
       code: err.code ?? 'shipping_quote_failed',
     });
   }
@@ -158,7 +159,7 @@ export const updateAdminShippingSettings = async (req: AuthenticatedRequest, res
     const err = error as { statusCode?: number; message?: string; code?: string };
     res.status(err.statusCode ?? 400).json({
       success: false,
-      message: err.message ?? 'Unable to update shipping settings',
+      message: sanitizeErrorMessage(error, 'Unable to update shipping settings'),
       code: err.code ?? 'shipping_settings_update_failed',
     });
   }

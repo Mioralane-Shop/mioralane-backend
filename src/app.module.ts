@@ -31,11 +31,23 @@ import adminReviewRoutes from './review/admin-review.routes';
 import { authLimiter } from './middleware/rateLimiter.middleware';
 import { csrfOriginGuard } from './middleware/csrf.middleware';
 import { stripMongoOperators } from './middleware/strip-mongo-operators.middleware';
+import {
+  CorsOriginDeniedError,
+  errorHandler,
+  notFoundHandler,
+  requestId,
+} from './middleware/error.middleware';
 import { getAllowedOrigins } from './config/allowed-origins';
 import { swaggerSpec, swaggerServe, swaggerSetup } from './swagger';
 
 const createApp = (): express.Application => {
   const app = express();
+
+  // Correlation id — mounted before everything else, including CORS, so that a
+  // request rejected at the very first middleware still carries one. The id is
+  // echoed as `X-Request-Id` on every response and printed with every 5xx log
+  // line, which is what ties a user-visible failure to its stack trace.
+  app.use(requestId);
 
   // Middlewares — CORS must be first.
   // The origin allowlist lives in `config/allowed-origins.ts` so CORS and the
@@ -51,7 +63,13 @@ const createApp = (): express.Application => {
         if (getAllowedOrigins().includes(origin)) {
           callback(null, true);
         } else {
-          callback(new Error(`CORS origin denied: ${origin}`));
+          // Rejected origins are forwarded to the terminal error handler, which
+          // answers 403 `{ success: false, message: 'Origin not allowed' }`. The
+          // rejected origin travels as a property, not in the message, so it
+          // reaches the server log and never the response body. Previously this
+          // carried the origin in the message and fell through to Express's
+          // default handler, which answered 500 with an HTML body.
+          callback(new CorsOriginDeniedError(origin));
         }
       },
       credentials: true,
@@ -169,6 +187,16 @@ const createApp = (): express.Application => {
   app.get('/api/health', (_req, res) => {
     res.json({ status: 'ok', timestamp: new Date().toISOString() });
   });
+
+  // ── Terminal middleware ──────────────────────────────────────────────────
+  // Order is load-bearing. `notFoundHandler` and `errorHandler` must be the last
+  // two registrations, after every route: Express walks middleware in
+  // registration order, so anything mounted after these would be unreachable.
+  // An unmatched path falls to the 404 handler; a thrown or rejected error from
+  // any earlier middleware or handler skips straight to the four-argument error
+  // handler.
+  app.use(notFoundHandler);
+  app.use(errorHandler);
 
   return app;
 };

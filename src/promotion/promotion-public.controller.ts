@@ -3,6 +3,7 @@ import { Request, Response } from 'express';
 import { Product } from '../product/product.model';
 import { Combo } from '../combo/combo.model';
 import { AuthenticatedRequest } from '../middleware/auth.middleware';
+import { sanitizeErrorMessage } from '../middleware/error.middleware';
 import { Coupon } from './coupon.model';
 import {
   calculateAutomaticPromotion,
@@ -141,7 +142,7 @@ export const validatePromotion = async (req: AuthenticatedRequest, res: Response
     const err = error as { statusCode?: number; message?: string; code?: string };
     res.status(err.statusCode ?? 400).json({
       success: false,
-      message: err.message ?? 'Unable to validate promotion',
+      message: sanitizeErrorMessage(error, 'Unable to validate promotion'),
       code: err.code ?? 'promotion_validation_failed',
     });
   }

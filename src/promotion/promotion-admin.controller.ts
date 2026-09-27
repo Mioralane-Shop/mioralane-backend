@@ -2,6 +2,7 @@ import mongoose from 'mongoose';
 import type { SortOrder } from 'mongoose';
 import { Response } from 'express';
 import { AuthenticatedRequest } from '../middleware/auth.middleware';
+import { sanitizeValidationMessages } from '../middleware/error.middleware';
 import { getPaginationParams } from '../utils/pagination';
 import { Coupon } from './coupon.model';
 import { CouponUsage } from './coupon-usage.model';
@@ -34,7 +35,7 @@ const sendMutationError = (res: Response, error: unknown, label: string): void =
     res.status(400).json({
       success: false,
       message: 'Validation failed',
-      errors: Object.values(error.errors).map((entry) => entry.message),
+      errors: sanitizeValidationMessages(error),
     });
     return;
   }

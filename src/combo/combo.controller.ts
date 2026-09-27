@@ -5,6 +5,10 @@ import { slugify } from '../utils/slugify';
 import mongoose from 'mongoose';
 import { extractMediaUrls, normalizeMediaAssets } from '../media/media.utils';
 import type { MediaAsset } from '../media/media.types';
+import {
+    describeCastError,
+    sanitizeValidationMessages,
+} from '../middleware/error.middleware';
 import { applyCatalogStockChange } from '../inventory/inventory-transaction.service';
 import {
     buildActivityChanges,
@@ -211,17 +215,16 @@ export const createCombo = async (req: Request, res: Response): Promise<void> =>
             res.status(400).json({
                 success: false,
                 message: 'Validation failed',
-                errors: [error.path === 'stock' ? 'Stock must be a non-negative integer' : error.message],
+                errors: [describeCastError(error)],
             });
             return;
         }
 
         if (error.name === 'ValidationError') {
-            const messages = Object.values(error.errors).map((e: any) => e.message);
             res.status(400).json({
                 success: false,
                 message: 'Validation failed',
-                errors: messages,
+                errors: sanitizeValidationMessages(error),
             });
             return;
         }
@@ -558,14 +561,13 @@ export const updateCombo = async (req: Request, res: Response): Promise<void> =>
             res.status(400).json({
                 success: false,
                 message: 'Validation failed',
-                errors: [error.path === 'stock' ? 'Stock must be a non-negative integer' : error.message],
+                errors: [describeCastError(error)],
             });
             return;
         }
 
         if (error.name === 'ValidationError') {
-            const messages = Object.values(error.errors).map((e: any) => e.message);
-            res.status(400).json({ success: false, message: 'Validation failed', errors: messages });
+            res.status(400).json({ success: false, message: 'Validation failed', errors: sanitizeValidationMessages(error) });
             return;
         }
         console.error('Error updating combo:', error);

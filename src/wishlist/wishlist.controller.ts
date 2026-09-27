@@ -1,6 +1,7 @@
 import { Response } from 'express';
 import mongoose from 'mongoose';
 import { AuthenticatedRequest } from '../middleware/auth.middleware';
+import { sanitizeErrorMessage } from '../middleware/error.middleware';
 import {
   WishlistSort,
   addWishlistItem as addWishlistItemService,
@@ -50,7 +51,7 @@ const respondWithError = (res: Response, error: unknown, fallbackMessage: string
 
   res.status(err.statusCode ?? 500).json({
     success: false,
-    message: err.message ?? fallbackMessage,
+    message: sanitizeErrorMessage(error, fallbackMessage),
     ...(err.code ? { code: err.code } : {}),
   });
 };

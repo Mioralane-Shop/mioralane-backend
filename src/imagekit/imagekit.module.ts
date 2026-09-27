@@ -1,5 +1,6 @@
 import { NextFunction, Request, RequestHandler, Response, Router } from 'express';
 import multer from 'multer';
+import { sanitizeErrorMessage } from '../middleware/error.middleware';
 import { ImageKitController } from './imagekit.controller';
 import { ImageKitService } from './imagekit.service';
 
@@ -61,7 +62,7 @@ const handleSingleUpload: RequestHandler = (req, res, next) => {
       return;
     }
 
-    const message = uploadError.message || 'Invalid upload request';
+    const message = sanitizeErrorMessage(uploadError, 'Invalid upload request');
     res.status(400).json({
       success: false,
       message,
