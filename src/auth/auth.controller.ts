@@ -4,6 +4,7 @@ import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { OAuth2Client } from 'google-auth-library';
 import { UserModel } from './user.model';
+import type { LoginUserInput, RegisterUserInput } from './auth.schemas';
 import { recordActivity } from '../activity-log/activity-log.service';
 import {
   JWT_ALGORITHM,
@@ -170,23 +171,13 @@ const errorMessage = (): string =>
  */
 export const registerUser = async (req: Request, res: Response): Promise<void> => {
   try {
-    const { username, email, password } = req.body || {};
+    // Shape, presence, and non-string payloads such as `{"password": {"$ne": null}}`
+    // are enforced by `validate()` at the route; req.body is already the parsed result.
+    const { username, email, password } = req.body as RegisterUserInput;
 
-    // Non-string payloads (for example `{"password": {"$ne": null}}`) are
-    // rejected here instead of reaching Mongoose/bcrypt, where they would only
-    // produce a 500 and a noisy error log.
-    if (typeof username !== 'string' || typeof email !== 'string' || typeof password !== 'string') {
-      res.status(400).json({ success: false, message: 'Username, email, and password are required' });
-      return;
-    }
-
-    if (!username || !email || !password) {
-      res.status(400).json({ success: false, message: 'Username, email, and password are required' });
-      return;
-    }
-
-    // Mirrors the schema's minlength rule, so an over-short password gets a
-    // clear 400 instead of falling through to the generic 500 handler.
+    // Length is a policy rather than a shape rule, so it stays here where it can
+    // keep its own specific message. It also mirrors the Mongoose minlength, so
+    // an over-short password gets a clear 400 instead of the generic 500 handler.
     if (password.length < MIN_PASSWORD_LENGTH) {
       res.status(400).json({
         success: false,
@@ -305,16 +296,13 @@ export const registerUser = async (req: Request, res: Response): Promise<void> =
  */
 export const loginUser = async (req: Request, res: Response): Promise<void> => {
   try {
-    const { username, email, password } = req.body || {};
+    const { username, email, password } = req.body as LoginUserInput;
     const loginIdentifier = username ?? email;
 
-    // Reject non-string input before it reaches a Mongoose query or bcrypt.
-    if (typeof loginIdentifier !== 'string' || typeof password !== 'string') {
-      res.status(400).json({ success: false, message: 'Username or email and password are required' });
-      return;
-    }
-
-    if (!loginIdentifier || !password) {
+    // Shape and presence are enforced by `validate()` at the route. This
+    // narrowing exists only so TypeScript knows an identifier is present — the
+    // schema's refinement guarantees it at runtime.
+    if (loginIdentifier === undefined) {
       res.status(400).json({ success: false, message: 'Username or email and password are required' });
       return;
     }

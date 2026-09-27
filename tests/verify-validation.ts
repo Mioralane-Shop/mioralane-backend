@@ -20,7 +20,9 @@
  *
  * Exits non-zero if any check fails.
  */
+import { readFileSync } from 'node:fs';
 import type { Server } from 'node:http';
+import { join } from 'node:path';
 import express, { type RequestHandler } from 'express';
 import { z } from 'zod';
 import {
@@ -33,6 +35,12 @@ import {
     stripMongoOperators,
     stripMongoOperatorsFrom,
 } from '../src/middleware/strip-mongo-operators.middleware';
+import {
+    googleLoginSchema,
+    loginUserSchema,
+    registerUserSchema,
+} from '../src/auth/auth.schemas';
+import { registerUser } from '../src/auth/auth.controller';
 
 type Json = unknown;
 
@@ -112,6 +120,11 @@ const paramsSchema = z.object({
 
 const AUTH_MESSAGE_OVERRIDE = 'Username, email, and password are required';
 
+/** The exact 400 wordings the auth routes must keep (see auth.routes.ts). */
+const AUTH_REGISTER_MESSAGE = 'Username, email, and password are required';
+const AUTH_LOGIN_MESSAGE = 'Username or email and password are required';
+const GOOGLE_LOGIN_MESSAGE = 'Google credential is required';
+
 /**
  * Builds an object nested `levels` levels deep around `bottom`. Built
  * iteratively on purpose: `JSON.stringify` of a 50,000-level object would itself
@@ -150,6 +163,30 @@ const buildApp = (): express.Application => {
     );
     app.post('/zod/order', validate({ body: orderLikeSchema }), echo);
     app.get('/zod/item/:id', validate({ params: paramsSchema }), echo);
+
+    // Real auth schemas (P0-3.2). `/auth/register-policy` runs the real
+    // controller so its own password-length 400 is exercised; only failing
+    // payloads are sent there, so no database access is reached.
+    app.post(
+        '/auth/register',
+        validate({ body: registerUserSchema, message: AUTH_REGISTER_MESSAGE }),
+        echo,
+    );
+    app.post(
+        '/auth/register-policy',
+        validate({ body: registerUserSchema, message: AUTH_REGISTER_MESSAGE }),
+        registerUser,
+    );
+    app.post(
+        '/auth/login',
+        validate({ body: loginUserSchema, message: AUTH_LOGIN_MESSAGE }),
+        echo,
+    );
+    app.post(
+        '/auth/google',
+        validate({ body: googleLoginSchema, message: GOOGLE_LOGIN_MESSAGE }),
+        echo,
+    );
 
     // Everything below passes through the global operator strip first.
     app.use(stripMongoOperators);
@@ -348,7 +385,7 @@ const checkGlobalStripLayer = async (url: string): Promise<void> => {
 };
 
 const checkStripUnit = (): void => {
-    console.log('\n=== 3. stripMongoOperatorsFrom() unit checks ===');
+    console.log('\n=== 4. stripMongoOperatorsFrom() unit checks ===');
 
     check(
         'strips operators recursively, keeps legitimate values',
@@ -406,6 +443,142 @@ const checkStripUnit = (): void => {
     check('50,000-level nesting does not overflow the stack', !extremeThrew);
 };
 
+const checkAuthSchemas = async (url: string): Promise<void> => {
+    console.log('\n=== 3. auth schemas (P0-3.2) ===');
+
+    const register = await postJson(`${url}/auth/register`, validRegister);
+    check(
+        'register: valid payload passes',
+        register.status === 200 && deepEqual(register.body.body, validRegister),
+        `status=${register.status} body=${JSON.stringify(register.body.body)}`,
+    );
+
+    const injectedPassword = await postJson(`${url}/auth/register`, {
+        ...validRegister,
+        password: { $ne: null },
+    });
+    checkValidationEnvelope(
+        'register: operator password is rejected by Zod',
+        injectedPassword,
+        AUTH_REGISTER_MESSAGE,
+        'body.password',
+    );
+
+    const unknownRole = await postJson(`${url}/auth/register`, {
+        ...validRegister,
+        role: 'admin',
+    });
+    check(
+        'register: unknown role field is stripped',
+        unknownRole.status === 200 &&
+        !Object.prototype.hasOwnProperty.call(unknownRole.body.body ?? {}, 'role'),
+        `status=${unknownRole.status} body=${JSON.stringify(unknownRole.body.body)}`,
+    );
+
+    const shortUsername = await postJson(`${url}/auth/register`, {
+        ...validRegister,
+        username: 'ab',
+    });
+    checkValidationEnvelope(
+        'register: username under 3 chars is now a 400 (previously a 500 from Mongoose minlength)',
+        shortUsername,
+        AUTH_REGISTER_MESSAGE,
+        'body.username',
+    );
+
+    const shortPasswordViaSchema = await postJson(`${url}/auth/register`, {
+        ...validRegister,
+        password: 'short',
+    });
+    check(
+        'register: schema is shape-only, so a short password still passes Zod (policy is the controller\'s)',
+        shortPasswordViaSchema.status === 200,
+        `status=${shortPasswordViaSchema.status}`,
+    );
+
+    const shortPasswordViaController = await postJson(`${url}/auth/register-policy`, {
+        ...validRegister,
+        password: 'short',
+    });
+    check(
+        'register: controller still returns its own 400 for a short password',
+        shortPasswordViaController.status === 400 &&
+        shortPasswordViaController.body.message === 'Password must be at least 8 characters',
+        `status=${shortPasswordViaController.status} message=${String(shortPasswordViaController.body.message)}`,
+    );
+
+    const usernameInEmailField = await postJson(`${url}/auth/login`, {
+        email: 'johndoe',
+        password: 'anything',
+    });
+    check(
+        'login: accepts a username sent in the email field (Decision F)',
+        usernameInEmailField.status === 200 &&
+        deepEqual(usernameInEmailField.body.body, { email: 'johndoe', password: 'anything' }),
+        `status=${usernameInEmailField.status} body=${JSON.stringify(usernameInEmailField.body.body)}`,
+    );
+
+    const missingIdentifier = await postJson(`${url}/auth/login`, { password: 'anything' });
+    checkValidationEnvelope(
+        'login: missing identifier returns the exact legacy 400 message',
+        missingIdentifier,
+        AUTH_LOGIN_MESSAGE,
+        'body.username',
+    );
+
+    const missingCredential = await postJson(`${url}/auth/google`, {});
+    checkValidationEnvelope(
+        'google: missing credential returns the exact legacy 400 message',
+        missingCredential,
+        GOOGLE_LOGIN_MESSAGE,
+        'body.credential',
+    );
+};
+
+/**
+ * Static check: `validate()` must be the FIRST handler on each auth write route.
+ *
+ * The auth controllers cast `req.body` to the schema's `z.infer` type, so they
+ * trust the route to have parsed it. If the middleware is dropped, that cast
+ * becomes a lie: a non-string password (`{"password": {"$ne": null}}`) reaches
+ * the controller and throws instead of returning 400. Asserting the POSITION,
+ * not merely presence, also catches a `validate()` accidentally moved behind the
+ * handler — where it would never run.
+ */
+const AUTH_VALIDATED_ROUTES: ReadonlyArray<{ method: string; path: string }> = [
+    { method: 'post', path: '/register' },
+    { method: 'post', path: '/login' },
+    { method: 'post', path: '/google' },
+];
+
+const checkAuthRoutesValidateFirst = (): void => {
+    console.log('\n=== 5. auth routes keep validate() as the first handler ===');
+
+    const source = readFileSync(join(__dirname, '..', 'src', 'auth', 'auth.routes.ts'), 'utf8');
+
+    for (const route of AUTH_VALIDATED_ROUTES) {
+        const label = `POST /api/auth${route.path}`;
+        const pattern = new RegExp(
+            `router\\.${route.method}\\(\\s*'${route.path.replace(/\//g, '\\/')}'\\s*,\\s*([A-Za-z_$][\\w$]*)\\(`,
+        );
+        const firstHandler = pattern.exec(source)?.[1];
+
+        if (firstHandler === 'validate') {
+            console.log(`  OK   ${label}: validate() is the first handler`);
+            continue;
+        }
+
+        const message = `auth route ${label} lost its validate() middleware — the controller trusts the parsed body and will 500 on malformed input`;
+        console.log(`  FAIL ${message}`);
+
+        if (firstHandler !== undefined) {
+            console.log(`       (first handler found: ${firstHandler})`);
+        }
+
+        failures.push(message);
+    }
+};
+
 const main = async (): Promise<void> => {
     const server = await startServer(buildApp());
     const url = baseUrl(server);
@@ -413,6 +586,7 @@ const main = async (): Promise<void> => {
     try {
         await checkZodLayer(url);
         await checkGlobalStripLayer(url);
+        await checkAuthSchemas(url);
     } finally {
         await new Promise<void>((resolve) => {
             server.close(() => resolve());
@@ -420,6 +594,7 @@ const main = async (): Promise<void> => {
     }
 
     checkStripUnit();
+    checkAuthRoutesValidateFirst();
 
     console.log('\n=== Result ===');
 
