@@ -8,9 +8,13 @@ name: Backend security verification
 
 on:
   push:
-    # `security/**` rather than `security/*` so a nested branch name such as
-    # `security/p1/csrf-token` also runs CI.
     branches:
+      # `main` so mainline commits stay verified after this hardening work merges.
+      # Without it the workflow would only ever run on the security branch, and a
+      # broken main would not be noticed until the next pull request.
+      - main
+      # `security/**` rather than `security/*` so a nested branch name such as
+      # `security/p1/csrf-token` also runs CI.
       - 'security/**'
   pull_request:
     branches:
