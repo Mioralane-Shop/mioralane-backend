@@ -3,7 +3,7 @@ import mongoose from 'mongoose';
 import { Response } from 'express';
 import { Product } from '../product/product.model';
 import { Combo } from '../combo/combo.model';
-import { Order, OrderItemType, PaymentMethod } from './order.model';
+import { Order, OrderItemType } from './order.model';
 import { AuthenticatedRequest } from '../middleware/auth.middleware';
 import { OrderStatus } from '../enums/order-status.enum';
 import { CouponUsage } from '../promotion/coupon-usage.model';
@@ -22,40 +22,10 @@ import {
 import { resolveSavedAddressForCheckout } from '../address/address.service';
 import { recordOrderStockDeductions } from '../inventory/inventory-transaction.service';
 import { pickActivitySnapshot, recordActivity } from '../activity-log/activity-log.service';
+import type { CreateOrderInput } from './order.schemas';
 
 /** Fields kept in the participant order snapshot. */
 const ORDER_AUDIT_FIELDS = ['orderNumber', 'orderStatus', 'totalAmount', 'paymentMethod'];
-
-type OrderPayloadItem = {
-  itemId?: string;
-  productId?: string;
-  itemType?: OrderItemType;
-  title?: string;
-  price?: number;
-  thumbnail?: string;
-  quantity: number;
-};
-
-type CreateOrderBody = {
-  items?: OrderPayloadItem[];
-  shippingAddress?: {
-    name?: string;
-    phone?: string;
-    division?: string;
-    district?: string;
-    area?: string;
-    address?: string;
-    detailedAddress?: string;
-    fullAddress?: string;
-    landmark?: string;
-    addressId?: string;
-  };
-  /** Saved address book entry selected at checkout. */
-  addressId?: string;
-  paymentMethod?: PaymentMethod;
-  couponCode?: string;
-  quoteFingerprint?: string;
-};
 
 type HttpError = Error & { statusCode?: number; code?: string; quote?: unknown };
 
@@ -74,7 +44,7 @@ const createHttpError = (statusCode: number, message: string, code?: string, quo
 };
 
 export const createOrder = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
-  const body = req.body as CreateOrderBody | undefined;
+  const body = req.body as CreateOrderInput | undefined;
   const userId = req.user?.id;
 
   if (!userId) {

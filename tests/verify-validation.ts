@@ -41,6 +41,12 @@ import {
     registerUserSchema,
 } from '../src/auth/auth.schemas';
 import { registerUser } from '../src/auth/auth.controller';
+import {
+    MAX_ORDER_ITEM_QUANTITY,
+    createOrderSchema,
+} from '../src/order/order.schemas';
+import { createOrder } from '../src/order/order.controller';
+import type { AuthenticatedRequest } from '../src/middleware/auth.middleware';
 
 type Json = unknown;
 
@@ -149,6 +155,12 @@ const echo = (req: express.Request, res: express.Response): void => {
     res.json({ ok: true, body: req.body, query: req.query, params: req.params });
 };
 
+/** Stand-in for `protect` so real controllers can run without a database. */
+const stubAuth: RequestHandler = (req, _res, next) => {
+    (req as AuthenticatedRequest).user = { id: '507f1f77bcf86cd799439011', role: 'user' };
+    next();
+};
+
 const buildApp = (): express.Application => {
     const app = express();
     app.use(express.json());
@@ -186,6 +198,17 @@ const buildApp = (): express.Application => {
         '/auth/google',
         validate({ body: googleLoginSchema, message: GOOGLE_LOGIN_MESSAGE }),
         echo,
+    );
+
+    // Order schema (P0-3.3). `/order/create-real` runs the real controller behind a
+    // stubbed req.user so its own "Order items are required" 400 is exercised;
+    // only payloads that fail before any database access are sent there.
+    app.post('/order/create', validate({ body: createOrderSchema }), echo);
+    app.post(
+        '/order/create-real',
+        stubAuth,
+        validate({ body: createOrderSchema }),
+        createOrder,
     );
 
     // Everything below passes through the global operator strip first.
@@ -384,8 +407,142 @@ const checkGlobalStripLayer = async (url: string): Promise<void> => {
     );
 };
 
+const checkOrderSchema = async (url: string): Promise<void> => {
+    console.log('\n=== 4. order schema (P0-3.3) ===');
+
+    const validOrder = {
+        items: [{ itemId: '507f1f77bcf86cd799439011', itemType: 'product', quantity: 2 }],
+        shippingAddress: {
+            name: 'Test Customer',
+            phone: '01700000000',
+            division: 'Dhaka',
+            district: 'Dhaka',
+            area: 'Gulshan',
+            address: 'House 1, Road 1',
+        },
+        paymentMethod: 'cash_on_delivery',
+        couponCode: 'SAVE10',
+        quoteFingerprint: 'fingerprint-abc123',
+    };
+
+    const valid = await postJson(`${url}/order/create`, validOrder);
+    check(
+        'valid payload passes, and couponCode + quoteFingerprint survive',
+        valid.status === 200 && deepEqual(valid.body.body, validOrder),
+        `status=${valid.status} body=${JSON.stringify(valid.body.body)}`,
+    );
+
+    const injectedItemId = await postJson(`${url}/order/create`, {
+        ...validOrder,
+        items: [{ ...validOrder.items[0], itemId: { $ne: null } }],
+    });
+    checkValidationEnvelope(
+        'order: operator itemId is rejected by Zod',
+        injectedItemId,
+        VALIDATION_FAILURE_MESSAGE,
+        'body.items.0',
+    );
+
+    const malformedItemId = await postJson(`${url}/order/create`, {
+        ...validOrder,
+        items: [{ itemId: 'not-an-object-id', itemType: 'product', quantity: 1 }],
+    });
+    checkValidationEnvelope(
+        'order: non-ObjectId itemId is now a clean 400 (was a Mongoose CastError → 500)',
+        malformedItemId,
+        VALIDATION_FAILURE_MESSAGE,
+        'body.items.0.itemId',
+    );
+
+    const unknownFields = await postJson(`${url}/order/create`, {
+        ...validOrder,
+        totalAmount: 1,
+        discountAmount: 5,
+    });
+    check(
+        'order: unknown totalAmount/discountAmount are stripped',
+        unknownFields.status === 200 &&
+        deepEqual(unknownFields.body.body, validOrder),
+        `status=${unknownFields.status} body=${JSON.stringify(unknownFields.body.body)}`,
+    );
+
+    const derivedFields = await postJson(`${url}/order/create`, {
+        ...validOrder,
+        items: [
+            {
+                ...validOrder.items[0],
+                title: 'Attacker chosen title',
+                price: 1,
+                thumbnail: 'evil.jpg',
+            },
+        ],
+        shippingAddress: { ...validOrder.shippingAddress, deliveryZone: 'inside_dhaka' },
+    });
+    const derivedBody = JSON.stringify(derivedFields.body.body);
+    check(
+        'order: server-derived fields (title/price/thumbnail/deliveryZone) are stripped',
+        derivedFields.status === 200 &&
+        !derivedBody.includes('Attacker chosen title') &&
+        !derivedBody.includes('evil.jpg') &&
+        !derivedBody.includes('deliveryZone') &&
+        !derivedBody.includes('"price"'),
+        `status=${derivedFields.status} body=${derivedBody}`,
+    );
+
+    const numericStringQuantity = await postJson(`${url}/order/create`, {
+        ...validOrder,
+        items: [{ itemId: '507f1f77bcf86cd799439011', itemType: 'product', quantity: '3' }],
+    });
+    const quantityAfterParse = (
+        (numericStringQuantity.body.body as Record<string, unknown> | undefined)?.items as
+        | Array<{ quantity: unknown }>
+        | undefined
+    )?.[0]?.quantity;
+    check(
+        "order: numeric-string quantity '3' is accepted and coerced to the number 3",
+        numericStringQuantity.status === 200 && quantityAfterParse === 3,
+        `status=${numericStringQuantity.status} quantity=${String(quantityAfterParse)}`,
+    );
+
+    const emptiedQuantity = await postJson(`${url}/order/create`, {
+        ...validOrder,
+        items: [{ itemId: '507f1f77bcf86cd799439011', itemType: 'product', quantity: '' }],
+    });
+    check(
+        'order: empty-string quantity is rejected rather than coerced to 0',
+        emptiedQuantity.status === 400,
+        `status=${emptiedQuantity.status} message=${String(emptiedQuantity.body.message)}`,
+    );
+
+    const overCapQuantity = await postJson(`${url}/order/create`, {
+        ...validOrder,
+        items: [
+            {
+                itemId: '507f1f77bcf86cd799439011',
+                itemType: 'product',
+                quantity: MAX_ORDER_ITEM_QUANTITY + 1,
+            },
+        ],
+    });
+    check(
+        `order: quantity above the ${MAX_ORDER_ITEM_QUANTITY} cap is rejected`,
+        overCapQuantity.status === 400,
+        `status=${overCapQuantity.status}`,
+    );
+
+    const emptyItems = await postJson(`${url}/order/create-real`, {
+        ...validOrder,
+        items: [],
+    });
+    check(
+        'order: empty items array keeps the controller\'s exact "Order items are required" 400',
+        emptyItems.status === 400 && emptyItems.body.message === 'Order items are required',
+        `status=${emptyItems.status} message=${String(emptyItems.body.message)}`,
+    );
+};
+
 const checkStripUnit = (): void => {
-    console.log('\n=== 4. stripMongoOperatorsFrom() unit checks ===');
+    console.log('\n=== 5. stripMongoOperatorsFrom() unit checks ===');
 
     check(
         'strips operators recursively, keeps legitimate values',
@@ -552,7 +709,7 @@ const AUTH_VALIDATED_ROUTES: ReadonlyArray<{ method: string; path: string }> = [
 ];
 
 const checkAuthRoutesValidateFirst = (): void => {
-    console.log('\n=== 5. auth routes keep validate() as the first handler ===');
+    console.log('\n=== 6. auth routes keep validate() as the first handler ===');
 
     const source = readFileSync(join(__dirname, '..', 'src', 'auth', 'auth.routes.ts'), 'utf8');
 
@@ -579,6 +736,102 @@ const checkAuthRoutesValidateFirst = (): void => {
     }
 };
 
+/**
+ * Static check for the order route.
+ *
+ * Unlike the auth routes, `protect` legitimately runs first here, so the
+ * invariant is not "validate() is first" but "validate() runs before the
+ * controller" — the controller casts `req.body` to `CreateOrderInput`, so if the
+ * middleware is dropped or moved behind it, the cast becomes a lie.
+ */
+const ORDER_VALIDATED_ROUTE = {
+    file: 'order/order.routes.ts',
+    method: 'post',
+    path: '/',
+    controller: 'createOrder',
+};
+
+/** Parses `router.<method>('path', ...handlers)` registrations without regex. */
+const parseRouterRegistrations = (
+    source: string,
+): Array<{ method: string; path: string; args: string }> => {
+    const methods = ['get', 'post', 'put', 'patch', 'delete'];
+    const routes: Array<{ method: string; path: string; args: string }> = [];
+
+    for (const method of methods) {
+        const needle = `router.${method}(`;
+        let index = source.indexOf(needle);
+
+        while (index !== -1) {
+            const openParen = index + needle.length;
+            let depth = 1;
+            let cursor = openParen;
+
+            for (; cursor < source.length; cursor += 1) {
+                const char = source[cursor];
+
+                if (char === '(') {
+                    depth += 1;
+                } else if (char === ')') {
+                    depth -= 1;
+                    if (depth === 0) {
+                        break;
+                    }
+                }
+            }
+
+            const args = source.slice(openParen, cursor);
+            const quoteStart = args.indexOf("'");
+            const quoteEnd = quoteStart === -1 ? -1 : args.indexOf("'", quoteStart + 1);
+
+            if (quoteStart !== -1 && quoteEnd !== -1) {
+                routes.push({ method, path: args.slice(quoteStart + 1, quoteEnd), args });
+            }
+
+            index = source.indexOf(needle, cursor + 1);
+        }
+    }
+
+    return routes;
+};
+
+const checkOrderRouteValidated = (): void => {
+    console.log('\n=== 7. order route keeps validate() before the controller ===');
+
+    const source = readFileSync(join(__dirname, '..', 'src', ORDER_VALIDATED_ROUTE.file), 'utf8');
+    const registration = parseRouterRegistrations(source).find(
+        (route) =>
+            route.method === ORDER_VALIDATED_ROUTE.method &&
+            route.path === ORDER_VALIDATED_ROUTE.path,
+    );
+
+    const label = `POST /api/orders`;
+    const failureMessage = `order route ${label} lost its validate() middleware — the controller trusts the parsed body and will 500 on malformed input`;
+
+    if (!registration) {
+        console.log(`  FAIL ${failureMessage}`);
+        console.log(`       (no POST '/' registration found in ${ORDER_VALIDATED_ROUTE.file})`);
+        failures.push(failureMessage);
+        return;
+    }
+
+    const quoteEnd = registration.args.indexOf("'", registration.args.indexOf("'") + 1);
+    const afterPath = registration.args.slice(quoteEnd + 1);
+    const validateIndex = afterPath.indexOf('validate(');
+    const controllerIndex = afterPath.indexOf(ORDER_VALIDATED_ROUTE.controller);
+
+    if (validateIndex !== -1 && (controllerIndex === -1 || validateIndex < controllerIndex)) {
+        console.log(`  OK   ${label}: validate() runs before ${ORDER_VALIDATED_ROUTE.controller}`);
+        return;
+    }
+
+    console.log(`  FAIL ${failureMessage}`);
+    console.log(
+        `       (validate() at ${validateIndex}, ${ORDER_VALIDATED_ROUTE.controller} at ${controllerIndex})`,
+    );
+    failures.push(failureMessage);
+};
+
 const main = async (): Promise<void> => {
     const server = await startServer(buildApp());
     const url = baseUrl(server);
@@ -587,6 +840,7 @@ const main = async (): Promise<void> => {
         await checkZodLayer(url);
         await checkGlobalStripLayer(url);
         await checkAuthSchemas(url);
+        await checkOrderSchema(url);
     } finally {
         await new Promise<void>((resolve) => {
             server.close(() => resolve());
@@ -595,6 +849,7 @@ const main = async (): Promise<void> => {
 
     checkStripUnit();
     checkAuthRoutesValidateFirst();
+    checkOrderRouteValidated();
 
     console.log('\n=== Result ===');
 
