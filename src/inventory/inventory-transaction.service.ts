@@ -376,6 +376,9 @@ export type ManualInventoryOperationInput = {
     actorRole: InventoryActorRole;
 };
 
+// Kept after Zod edge validation: applyManualInventoryOperation is exported
+// and can be called internally with runtime-erased types. Without these
+// guards, quantity: -5 on STOCK_OUT would ADD 5 units (direction × −1).
 const readPositiveInteger = (value: unknown, label: string): number => {
     const parsed = typeof value === 'string' && value.trim() !== '' ? Number(value) : value;
 
