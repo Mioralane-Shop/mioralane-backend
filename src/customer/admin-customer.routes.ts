@@ -1,20 +1,13 @@
 import { Router, RequestHandler } from 'express';
-import { adminOnly, protect } from '../middleware/auth.middleware';
+import { adminGuard } from '../middleware/auth.middleware';
 import { getAdminCustomerById, getAdminCustomers } from './admin-customer.controller';
 
 const router = Router();
 
-router.get(
-  '/',
-  protect as RequestHandler,
-  adminOnly as RequestHandler,
-  getAdminCustomers as RequestHandler
-);
-router.get(
-  '/:id',
-  protect as RequestHandler,
-  adminOnly as RequestHandler,
-  getAdminCustomerById as RequestHandler
-);
+// Every route on this router is admin-only.
+router.use(...adminGuard);
+
+router.get('/', getAdminCustomers as RequestHandler);
+router.get('/:id', getAdminCustomerById as RequestHandler);
 
 export default router;

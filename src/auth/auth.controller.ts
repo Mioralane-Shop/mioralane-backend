@@ -4,11 +4,28 @@ import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { OAuth2Client } from 'google-auth-library';
 import { UserModel } from './user.model';
+import type { LoginUserInput, RegisterUserInput } from './auth.schemas';
+import { recordActivity } from '../activity-log/activity-log.service';
+import {
+  JWT_ALGORITHM,
+  JWT_AUDIENCE,
+  JWT_ISSUER,
+  UserRole,
+} from '../middleware/auth.middleware';
 
 const JWT_SECRET = process.env.JWT_SECRET;
 const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '7d';
+const ADMIN_JWT_EXPIRES_IN = process.env.ADMIN_JWT_EXPIRES_IN || '1h';
 const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || '';
 const DEFAULT_COOKIE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+const MIN_PASSWORD_LENGTH = 8;
+
+/**
+ * Bcrypt hash of a throwaway literal, used only to spend the same CPU time on
+ * the "account not found" branch as on a real password comparison. It is not a
+ * credential for any account.
+ */
+const DUMMY_PASSWORD_HASH = '$2b$10$JctwlGFITf3yuzChnb281.FmTKeI7SjSn4LUd5W2I3ffg3QLSgQRK';
 
 const googleClient = new OAuth2Client(GOOGLE_CLIENT_ID);
 
@@ -33,18 +50,35 @@ const resolveCookieMaxAge = (expiresIn: string): number => {
 };
 
 /**
+ * Role-scoped session lifetime (P0-1.4).
+ *
+ * Admins get a short session (`ADMIN_JWT_EXPIRES_IN`, default 1h); customers
+ * keep the long-lived `JWT_EXPIRES_IN`, so the storefront UX is unchanged.
+ * Security does not rest on expiry alone, because `protect` re-reads the
+ * account's role from MongoDB on every request.
+ */
+const resolveSessionTtl = (role: UserRole): { expiresIn: string; maxAgeMs: number } => {
+  const expiresIn = role === 'admin' ? ADMIN_JWT_EXPIRES_IN : JWT_EXPIRES_IN;
+
+  return { expiresIn, maxAgeMs: resolveCookieMaxAge(expiresIn) };
+};
+
+/**
  * Sets the JWT as an httpOnly cookie for enhanced security.
  * The token is also returned in the JSON body so mobile / native clients
  * and the Bearer-header flow continue to work.
+ *
+ * `maxAgeMs` is always derived from the same TTL used to sign the token, so the
+ * cookie can never outlive (or under-live) the JWT it carries.
  */
-const setAuthCookie = (res: Response, token: string): void => {
+const setAuthCookie = (res: Response, token: string, maxAgeMs: number): void => {
   const isProduction = process.env.NODE_ENV === 'production';
 
   res.cookie('token', token, {
     httpOnly: true,               // Not accessible via JavaScript (XSS protection)
     secure: isProduction,         // HTTPS only in production
     sameSite: isProduction ? 'none' : 'lax', // 'none' required for cross-domain (mioralane.com ↔ vercel.app)
-    maxAge: resolveCookieMaxAge(JWT_EXPIRES_IN),
+    maxAge: maxAgeMs,
     path: '/',
   });
 };
@@ -52,12 +86,20 @@ const setAuthCookie = (res: Response, token: string): void => {
 /**
  * Generates a signed JWT for the given user payload.
  */
-const generateToken = (payload: { id: string; role: 'user' | 'admin' }): string => {
+const generateToken = (payload: { id: string; role: UserRole }): string => {
   if (!JWT_SECRET) {
     throw new Error('JWT_SECRET is required for authentication');
   }
 
-  const options: jwt.SignOptions = { expiresIn: JWT_EXPIRES_IN as jwt.SignOptions['expiresIn'] };
+  const { expiresIn } = resolveSessionTtl(payload.role);
+
+  const options: jwt.SignOptions = {
+    algorithm: JWT_ALGORITHM,
+    issuer: JWT_ISSUER,
+    audience: JWT_AUDIENCE,
+    expiresIn: expiresIn as jwt.SignOptions['expiresIn'],
+  };
+
   return jwt.sign(payload, JWT_SECRET, options);
 };
 
@@ -129,20 +171,32 @@ const errorMessage = (): string =>
  */
 export const registerUser = async (req: Request, res: Response): Promise<void> => {
   try {
-    const { username, email, password } = req.body || {};
+    // Shape, presence, and non-string payloads such as `{"password": {"$ne": null}}`
+    // are enforced by `validate()` at the route; req.body is already the parsed result.
+    const { username, email, password } = req.body as RegisterUserInput;
 
-    if (!username || !email || !password) {
-      res.status(400).json({ success: false, message: 'Username, email, and password are required' });
+    // Length is a policy rather than a shape rule, so it stays here where it can
+    // keep its own specific message. It also mirrors the Mongoose minlength, so
+    // an over-short password gets a clear 400 instead of the generic 500 handler.
+    if (password.length < MIN_PASSWORD_LENGTH) {
+      res.status(400).json({
+        success: false,
+        message: `Password must be at least ${MIN_PASSWORD_LENGTH} characters`,
+      });
       return;
     }
 
-    // Check if the user already exists by username or email
+    // Check if the user already exists by username or email.
+    // One generic message covers both fields, so the response cannot be used to
+    // enumerate registered usernames or email addresses.
     const existingUser = await UserModel.findOne({
       $or: [{ username }, { email: email.toLowerCase() }],
     });
     if (existingUser) {
-      const field = existingUser.username === username ? 'Username' : 'Email';
-      res.status(409).json({ success: false, message: `${field} already exists` });
+      res.status(409).json({
+        success: false,
+        message: 'An account with these details already exists',
+      });
       return;
     }
 
@@ -151,9 +205,20 @@ export const registerUser = async (req: Request, res: Response): Promise<void> =
 
     // Generate JWT
     const token = generateToken({ id: user._id.toString(), role: user.role });
+    const { maxAgeMs } = resolveSessionTtl(user.role);
 
     // Set httpOnly cookie
-    setAuthCookie(res, token);
+    setAuthCookie(res, token, maxAgeMs);
+
+    // No session exists yet at registration, so the actor is the user we just created.
+    await recordActivity(req, {
+      action: 'REGISTER',
+      entityType: user.role === 'admin' ? 'ADMIN' : 'PARTICIPANT',
+      entityId: user._id.toString(),
+      entityName: user.username,
+      actor: { id: user._id.toString(), role: user.role, name: user.username, email: user.email },
+      after: { username: user.username, email: user.email, role: user.role },
+    });
 
     res.status(201).json({
       success: true,
@@ -231,10 +296,13 @@ export const registerUser = async (req: Request, res: Response): Promise<void> =
  */
 export const loginUser = async (req: Request, res: Response): Promise<void> => {
   try {
-    const { username, email, password } = req.body || {};
+    const { username, email, password } = req.body as LoginUserInput;
     const loginIdentifier = username ?? email;
 
-    if (!loginIdentifier || !password) {
+    // Shape and presence are enforced by `validate()` at the route. This
+    // narrowing exists only so TypeScript knows an identifier is present — the
+    // schema's refinement guarantees it at runtime.
+    if (loginIdentifier === undefined) {
       res.status(400).json({ success: false, message: 'Username or email and password are required' });
       return;
     }
@@ -245,22 +313,44 @@ export const loginUser = async (req: Request, res: Response): Promise<void> => {
     }).select('+password');
 
     if (!user) {
-      res.status(400).json({ success: false, message: 'Invalid credentials' });
+      // Spend the same bcrypt work as the wrong-password branch, so response
+      // time cannot be used to probe whether an account exists.
+      await bcrypt.compare(password, DUMMY_PASSWORD_HASH);
+      res.status(401).json({ success: false, message: 'Invalid credentials' });
+      return;
+    }
+
+    // Google-only accounts have no local password. Treat that exactly like a
+    // wrong password (401) instead of letting bcrypt throw into the 500 path.
+    const storedPasswordHash = user.password;
+    if (!storedPasswordHash) {
+      await bcrypt.compare(password, DUMMY_PASSWORD_HASH);
+      res.status(401).json({ success: false, message: 'Invalid credentials' });
       return;
     }
 
     // Compare password using bcrypt
-    const isMatch = await bcrypt.compare(password, user.password!);
+    const isMatch = await bcrypt.compare(password, storedPasswordHash);
     if (!isMatch) {
-      res.status(400).json({ success: false, message: 'Invalid credentials' });
+      res.status(401).json({ success: false, message: 'Invalid credentials' });
       return;
     }
 
     // Generate JWT
     const token = generateToken({ id: user._id.toString(), role: user.role });
+    const { maxAgeMs } = resolveSessionTtl(user.role);
 
     // Set httpOnly cookie
-    setAuthCookie(res, token);
+    setAuthCookie(res, token, maxAgeMs);
+
+    await recordActivity(req, {
+      action: 'LOGIN',
+      entityType: user.role === 'admin' ? 'ADMIN' : 'PARTICIPANT',
+      entityId: user._id.toString(),
+      entityName: user.username,
+      description: `Signed in as ${user.username}`,
+      actor: { id: user._id.toString(), role: user.role, name: user.username, email: user.email },
+    });
 
     res.status(200).json({
       success: true,
@@ -368,9 +458,19 @@ export const googleLogin = async (req: Request, res: Response): Promise<void> =>
 
     // Generate Mioralane JWT
     const token = generateToken({ id: user._id.toString(), role: user.role });
+    const { maxAgeMs } = resolveSessionTtl(user.role);
 
     // Set httpOnly cookie
-    setAuthCookie(res, token);
+    setAuthCookie(res, token, maxAgeMs);
+
+    await recordActivity(req, {
+      action: 'LOGIN',
+      entityType: user.role === 'admin' ? 'ADMIN' : 'PARTICIPANT',
+      entityId: user._id.toString(),
+      entityName: user.username,
+      description: `Signed in with Google as ${user.username}`,
+      actor: { id: user._id.toString(), role: user.role, name: user.username, email: user.email },
+    });
 
     res.status(200).json({
       success: true,

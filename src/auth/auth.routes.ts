@@ -1,13 +1,29 @@
 import { Router, Response, RequestHandler } from 'express';
 import { registerUser, loginUser, logoutUser, googleLogin } from './auth.controller';
+import { googleLoginSchema, loginUserSchema, registerUserSchema } from './auth.schemas';
+import { validate } from '../middleware/validate.middleware';
 import { protect, AuthenticatedRequest } from '../middleware/auth.middleware';
 import { UserModel } from './user.model';
 
 const router = Router();
 
-router.post('/register', registerUser);
-router.post('/login', loginUser);
-router.post('/google', googleLogin);
+// Messages are overridden per route so every existing 400 keeps its exact
+// wording. Status codes and the response envelope are unchanged.
+router.post(
+  '/register',
+  validate({ body: registerUserSchema, message: 'Username, email, and password are required' }),
+  registerUser
+);
+router.post(
+  '/login',
+  validate({ body: loginUserSchema, message: 'Username or email and password are required' }),
+  loginUser
+);
+router.post(
+  '/google',
+  validate({ body: googleLoginSchema, message: 'Google credential is required' }),
+  googleLogin
+);
 router.post('/logout', logoutUser);
 
 /**

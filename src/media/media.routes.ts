@@ -1,8 +1,11 @@
 import { NextFunction, Request, RequestHandler, Response, Router } from 'express';
 import multer from 'multer';
-import { adminOnly, protect } from '../middleware/auth.middleware';
+import { adminGuard } from '../middleware/auth.middleware';
+import { validate } from '../middleware/validate.middleware';
+import { sanitizeErrorMessage } from '../middleware/error.middleware';
 import { ImageKitService } from '../imagekit/imagekit.service';
 import { MediaController } from './media.controller';
+import { mediaUploadSchema } from './media-upload.schemas';
 
 const MAX_MEDIA_UPLOAD_SIZE_BYTES = 8 * 1024 * 1024;
 
@@ -48,7 +51,7 @@ const handleSingleUpload: RequestHandler = (req, res, next) => {
       return;
     }
 
-    const message = uploadError.message || 'Invalid upload request';
+    const message = sanitizeErrorMessage(uploadError, 'Invalid upload request');
     res.status(400).json({
       success: false,
       message,
@@ -60,11 +63,18 @@ const handleSingleUpload: RequestHandler = (req, res, next) => {
 
 const router = Router();
 
+// Scoped to the admin image endpoints only. A router-level `use` without a path
+// would also guard the customer-facing `/review-images` route below (currently
+// disabled) once it is restored.
+router.use('/images', ...adminGuard);
+
 router.post(
   '/images',
-  protect as RequestHandler,
-  adminOnly as RequestHandler,
   handleSingleUpload,
+  // MUST stay after handleSingleUpload: multer is what populates req.body for a
+  // multipart request, so validating before it would reject every upload with a
+  // missing assetType. The message keeps the route's exact legacy 400 wording.
+  validate({ body: mediaUploadSchema, message: 'assetType must be product, combo, or campaign' }),
   (req: Request, res: Response, next: NextFunction) => {
     void mediaController.uploadImage(req, res).catch(next);
   }
@@ -72,12 +82,24 @@ router.post(
 
 router.delete(
   '/images/:fileId',
-  protect as RequestHandler,
-  adminOnly as RequestHandler,
   (req: Request, res: Response, next: NextFunction) => {
     void mediaController.deleteImage(req, res).catch(next);
   }
 );
+
+// Review images are temporarily disabled — restore this route to re-enable review image uploads.
+// NOTE: re-import `protect` from '../middleware/auth.middleware' when restoring this route;
+// it is intentionally not imported while the route is disabled.
+// // Review images are uploaded by authenticated customers. The asset type is
+// // forced to "review" server-side; admin image routes stay admin-only.
+// router.post(
+//   '/review-images',
+//   protect as RequestHandler,
+//   handleSingleUpload,
+//   (req: Request, res: Response, next: NextFunction) => {
+//     void mediaController.uploadReviewImage(req, res).catch(next);
+//   }
+// );
 
 router.use((error: unknown, _req: Request, res: Response, _next: NextFunction) => {
   console.error('Media route error:', error);

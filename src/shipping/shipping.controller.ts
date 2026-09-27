@@ -2,7 +2,9 @@ import { Response } from 'express';
 import mongoose from 'mongoose';
 import { Combo } from '../combo/combo.model';
 import { AuthenticatedRequest } from '../middleware/auth.middleware';
+import { sanitizeErrorMessage } from '../middleware/error.middleware';
 import { Product } from '../product/product.model';
+import type { ShippingSettingsInput } from './shipping.schemas';
 import {
   calculateAutomaticPromotion,
   DiscountableOrderItem,
@@ -16,6 +18,11 @@ import {
   upsertShippingSettings,
   validateAndNormalizeShippingQuoteAddress,
 } from './shipping.service';
+import {
+  buildActivityChanges,
+  recordActivity,
+  resolveUpdateAction,
+} from '../activity-log/activity-log.service';
 
 const resolveQuoteItems = async (rawItems: any[]): Promise<DiscountableOrderItem[]> => {
   const resolved: DiscountableOrderItem[] = [];
@@ -114,7 +121,7 @@ export const quoteShipping = async (req: AuthenticatedRequest, res: Response): P
     const err = error as { statusCode?: number; message?: string; code?: string };
     res.status(err.statusCode ?? 400).json({
       success: false,
-      message: err.message ?? 'Unable to calculate shipping quote',
+      message: sanitizeErrorMessage(error, 'Unable to calculate shipping quote'),
       code: err.code ?? 'shipping_quote_failed',
     });
   }
@@ -127,13 +134,32 @@ export const getAdminShippingSettings = async (_req: AuthenticatedRequest, res: 
 
 export const updateAdminShippingSettings = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
-    const settings = await upsertShippingSettings(req.body);
+    const previousSettings = await getShippingSettings();
+    const settings = await upsertShippingSettings(req.body as ShippingSettingsInput);
+
+    const changes = buildActivityChanges(
+      previousSettings as unknown as Record<string, unknown>,
+      settings as unknown as Record<string, unknown>
+    );
+
+    if (changes.changedFields.length > 0) {
+      await recordActivity(req, {
+        action: resolveUpdateAction(changes.changedFields),
+        entityType: 'SETTINGS',
+        entityId: 'shipping',
+        entityName: 'Shipping settings',
+        before: changes.before,
+        after: changes.after,
+        metadata: { changedFields: changes.changedFields },
+      });
+    }
+
     res.json({ success: true, settings });
   } catch (error) {
     const err = error as { statusCode?: number; message?: string; code?: string };
     res.status(err.statusCode ?? 400).json({
       success: false,
-      message: err.message ?? 'Unable to update shipping settings',
+      message: sanitizeErrorMessage(error, 'Unable to update shipping settings'),
       code: err.code ?? 'shipping_settings_update_failed',
     });
   }
