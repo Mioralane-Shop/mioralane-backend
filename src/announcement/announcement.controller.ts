@@ -9,6 +9,7 @@ import {
     getAnnouncementBarSettings,
     upsertAnnouncementBarSettings,
 } from './announcement.service';
+import type { AnnouncementSettingsInput } from './announcement.schemas';
 
 /** Storefront announcement bar (top ticker) */
 export const getPublicAnnouncementBar = async (_req: Request, res: Response): Promise<void> => {
@@ -44,7 +45,12 @@ export const updateAdminAnnouncementBar = async (
 ): Promise<void> => {
     try {
         const previousSettings = await getAnnouncementBarSettings();
-        const settings = await upsertAnnouncementBarSettings(req.body);
+        // `req.body` is the parsed `announcementSettingsSchema` output; the service
+        // normalizer stays the authority for blank-row dropping, the
+        // "at least one message when enabled" rule and colour uppercasing.
+        const settings = await upsertAnnouncementBarSettings(
+            req.body as AnnouncementSettingsInput
+        );
 
         const changes = buildActivityChanges(
             previousSettings as unknown as Record<string, unknown>,

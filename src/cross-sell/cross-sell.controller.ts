@@ -1,6 +1,7 @@
 import { Response } from 'express';
 import { AuthenticatedRequest } from '../middleware/auth.middleware';
 import { getCrossSellSettings, upsertCrossSellSettings } from './cross-sell.service';
+import type { CrossSellSettingsInput } from './cross-sell.schemas';
 import {
   buildActivityChanges,
   recordActivity,
@@ -21,7 +22,7 @@ export const updateAdminCrossSellSettings = async (
 ): Promise<void> => {
   try {
     const previousSettings = await getCrossSellSettings();
-    const settings = await upsertCrossSellSettings(req.body);
+    const settings = await upsertCrossSellSettings(req.body as CrossSellSettingsInput);
 
     const changes = buildActivityChanges(
       previousSettings as unknown as Record<string, unknown>,

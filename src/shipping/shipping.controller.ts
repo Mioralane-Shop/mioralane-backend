@@ -3,6 +3,7 @@ import mongoose from 'mongoose';
 import { Combo } from '../combo/combo.model';
 import { AuthenticatedRequest } from '../middleware/auth.middleware';
 import { Product } from '../product/product.model';
+import type { ShippingSettingsInput } from './shipping.schemas';
 import {
   calculateAutomaticPromotion,
   DiscountableOrderItem,
@@ -133,7 +134,7 @@ export const getAdminShippingSettings = async (_req: AuthenticatedRequest, res: 
 export const updateAdminShippingSettings = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
     const previousSettings = await getShippingSettings();
-    const settings = await upsertShippingSettings(req.body);
+    const settings = await upsertShippingSettings(req.body as ShippingSettingsInput);
 
     const changes = buildActivityChanges(
       previousSettings as unknown as Record<string, unknown>,

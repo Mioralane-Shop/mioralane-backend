@@ -15,6 +15,7 @@ import {
   updateAdminInventorySettings,
 } from './inventory.controller';
 import { inventoryOperationSchema } from './inventory.schemas';
+import { inventorySettingsSchema } from './inventory-settings.schemas';
 
 export const adminInventorySettingsRoutes = Router();
 
@@ -22,7 +23,11 @@ export const adminInventorySettingsRoutes = Router();
 adminInventorySettingsRoutes.use(...adminGuard);
 
 adminInventorySettingsRoutes.get('/inventory', getAdminInventorySettings as RequestHandler);
-adminInventorySettingsRoutes.put('/inventory', updateAdminInventorySettings as RequestHandler);
+adminInventorySettingsRoutes.put(
+  '/inventory',
+  validate({ body: inventorySettingsSchema }),
+  updateAdminInventorySettings as RequestHandler
+);
 
 /** Inventory ledger + manual stock operations (mounted on /api/admin/inventory). */
 export const adminInventoryRoutes = Router();

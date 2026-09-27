@@ -1,6 +1,7 @@
 import { Response } from 'express';
 import { AuthenticatedRequest } from '../middleware/auth.middleware';
 import { getInventorySettings, upsertInventorySettings } from './inventory.service';
+import type { InventorySettingsInput } from './inventory-settings.schemas';
 import {
   InventoryItemType,
   InventoryTransactionType,
@@ -35,7 +36,7 @@ export const updateAdminInventorySettings = async (
 ): Promise<void> => {
   try {
     const previousSettings = await getInventorySettings();
-    const settings = await upsertInventorySettings(req.body);
+    const settings = await upsertInventorySettings(req.body as InventorySettingsInput);
 
     const changes = buildActivityChanges(
       previousSettings as unknown as Record<string, unknown>,

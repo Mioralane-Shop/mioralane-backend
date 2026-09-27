@@ -76,6 +76,10 @@ import {
     productArrivalSchema,
     updateProductSchema,
 } from '../src/product/product.schemas';
+import { announcementSettingsSchema } from '../src/announcement/announcement.schemas';
+import { crossSellSettingsSchema } from '../src/cross-sell/cross-sell.schemas';
+import { shippingSettingsSchema } from '../src/shipping/shipping.schemas';
+import { inventorySettingsSchema } from '../src/inventory/inventory-settings.schemas';
 import type { AuthenticatedRequest } from '../src/middleware/auth.middleware';
 import multer from 'multer';
 
@@ -335,6 +339,13 @@ const buildApp = (): express.Application => {
     app.post('/product/create', validate({ body: createProductSchema }), echo);
     app.put('/product/update', validate({ body: updateProductSchema }), echo);
     app.patch('/product/arrival', validate({ body: productArrivalSchema }), echo);
+
+    // Settings singletons (P0-3.12). All four are PUT upserts whose normalizers apply
+    // per-field defaults, so the schemas are deliberately all-optional.
+    app.put('/settings/announcement', validate({ body: announcementSettingsSchema }), echo);
+    app.put('/settings/cross-sell', validate({ body: crossSellSettingsSchema }), echo);
+    app.put('/settings/shipping', validate({ body: shippingSettingsSchema }), echo);
+    app.put('/settings/inventory', validate({ body: inventorySettingsSchema }), echo);
 
     // Everything below passes through the global operator strip first.
     app.use(stripMongoOperators);
@@ -2074,6 +2085,306 @@ const checkProductSchemas = async (url: string): Promise<void> => {
     );
 };
 
+/** Full announcement payload as the admin form sends it. */
+const validAnnouncement = {
+    enabled: true,
+    messages: [{ text: 'Free delivery over 2000 taka', url: '/shop' }],
+    animation: 'marquee',
+    direction: 'rtl',
+    background: 'sheen',
+    backgroundColor: '#006400',
+    textColor: '#FFEE32',
+    intervalSeconds: 4,
+    speedSeconds: 18,
+};
+
+const validCrossSell = {
+    enabled: true,
+    maximumRecommendations: 4,
+    minimumRecommendedProductPrice: 0,
+    maximumRecommendedProductPrice: 5000,
+};
+
+const validShipping = {
+    zones: {
+        inside_dhaka: { enabled: true, charge: 60, estimatedMinDays: 1, estimatedMaxDays: 2 },
+        dhaka_suburban: { enabled: true, charge: 90, estimatedMinDays: 2, estimatedMaxDays: 3 },
+        outside_dhaka: { enabled: true, charge: 130, estimatedMinDays: 3, estimatedMaxDays: 5 },
+    },
+    freeDeliveryThreshold: { enabled: true, minimumOrderValue: 2000 },
+    addressRequirements: { landmarkRequired: false },
+};
+
+const checkSettingsSchemas = async (url: string): Promise<void> => {
+    console.log('\n=== 4j. settings schemas (P0-3.12) ===');
+
+    /* ── announcement ───────────────────────────────────────────────────────── */
+
+    const announcement = await putJson(`${url}/settings/announcement`, validAnnouncement);
+    check(
+        'announcement: valid payload passes unchanged',
+        announcement.status === 200 && deepEqual(announcement.body.body, validAnnouncement),
+        `status=${announcement.status} body=${JSON.stringify(announcement.body.body)}`,
+    );
+
+    const announcementMass = await putJson(`${url}/settings/announcement`, {
+        ...validAnnouncement,
+        singletonKey: 'attacker_key',
+        _id: '507f1f77bcf86cd799439011',
+        id: '507f1f77bcf86cd799439012',
+        __v: 3,
+        createdAt: '2020-01-01T00:00:00.000Z',
+        updatedAt: '2020-01-01T00:00:00.000Z',
+        updatedBy: '507f1f77bcf86cd799439013',
+    });
+    const announcementMassBody = JSON.stringify(announcementMass.body.body);
+    check(
+        'announcement: singletonKey/_id/id/__v/createdAt/updatedAt/updatedBy are stripped',
+        announcementMass.status === 200 &&
+        deepEqual(announcementMass.body.body, validAnnouncement) &&
+        !announcementMassBody.includes('attacker_key') &&
+        !announcementMassBody.includes('2020-01-01'),
+        `status=${announcementMass.status} body=${announcementMassBody}`,
+    );
+
+    const announcementEnums: Array<[string, Record<string, unknown>]> = [
+        ['animation', { animation: 'bounce' }],
+        ['direction', { direction: 'ttb' }],
+        ['background', { background: 'stripes' }],
+    ];
+    for (const [label, patch] of announcementEnums) {
+        const response = await putJson(`${url}/settings/announcement`, {
+            ...validAnnouncement,
+            ...patch,
+        });
+        check(
+            `announcement: ${label} bogus value is rejected`,
+            response.status === 400,
+            `status=${response.status} message=${String(response.body.message)}`,
+        );
+    }
+
+    const announcementColours: Array<[string, Record<string, unknown>]> = [
+        ['backgroundColor red', { backgroundColor: 'red' }],
+        ['backgroundColor #FFF (3 digit)', { backgroundColor: '#FFF' }],
+        ['textColor rgb(...)', { textColor: 'rgb(0,0,0)' }],
+    ];
+    for (const [label, patch] of announcementColours) {
+        const response = await putJson(`${url}/settings/announcement`, {
+            ...validAnnouncement,
+            ...patch,
+        });
+        check(
+            `announcement: ${label} is rejected — colours go straight into storefront CSS`,
+            response.status === 400,
+            `status=${response.status} message=${String(response.body.message)}`,
+        );
+    }
+
+    const announcementRanges: Array<[string, Record<string, unknown>]> = [
+        ['intervalSeconds 1', { intervalSeconds: 1 }],
+        ['intervalSeconds 61', { intervalSeconds: 61 }],
+        ['speedSeconds 5', { speedSeconds: 5 }],
+        ['speedSeconds 61', { speedSeconds: 61 }],
+    ];
+    for (const [label, patch] of announcementRanges) {
+        const response = await putJson(`${url}/settings/announcement`, {
+            ...validAnnouncement,
+            ...patch,
+        });
+        check(
+            `announcement: ${label} is rejected`,
+            response.status === 400,
+            `status=${response.status} message=${String(response.body.message)}`,
+        );
+    }
+
+    const blankMessage = await putJson(`${url}/settings/announcement`, {
+        ...validAnnouncement,
+        messages: [{ text: '', url: '' }],
+    });
+    check(
+        'announcement: a blank message row is NOT a schema error (the service drops it)',
+        blankMessage.status === 200,
+        `status=${blankMessage.status} message=${String(blankMessage.body.message)}`,
+    );
+
+    const overlongMessage = await putJson(`${url}/settings/announcement`, {
+        ...validAnnouncement,
+        messages: [{ text: 'm'.repeat(221) }],
+    });
+    check(
+        'announcement: a message above 220 characters is rejected',
+        overlongMessage.status === 400,
+        `status=${overlongMessage.status}`,
+    );
+
+    const partialAnnouncement = await putJson(`${url}/settings/announcement`, { enabled: false });
+    check(
+        'announcement: a partial payload is accepted (the service defaults the rest)',
+        partialAnnouncement.status === 200 && deepEqual(partialAnnouncement.body.body, { enabled: false }),
+        `status=${partialAnnouncement.status} body=${JSON.stringify(partialAnnouncement.body.body)}`,
+    );
+
+    /* ── cross-sell ─────────────────────────────────────────────────────────── */
+
+    const crossSell = await putJson(`${url}/settings/cross-sell`, validCrossSell);
+    check(
+        'cross-sell: valid payload passes unchanged',
+        crossSell.status === 200 && deepEqual(crossSell.body.body, validCrossSell),
+        `status=${crossSell.status} body=${JSON.stringify(crossSell.body.body)}`,
+    );
+
+    const injectedMaximum = await putJson(`${url}/settings/cross-sell`, {
+        ...validCrossSell,
+        maximumRecommendations: { $ne: null },
+    });
+    checkValidationEnvelope(
+        'cross-sell: operator maximumRecommendations is rejected (it becomes a query .limit())',
+        injectedMaximum,
+        VALIDATION_FAILURE_MESSAGE,
+        'body.maximumRecommendations',
+    );
+
+    const crossSellNumerics: Array<[string, Record<string, unknown>]> = [
+        ['maximumRecommendations 0', { maximumRecommendations: 0 }],
+        ['maximumRecommendations 1.5', { maximumRecommendations: 1.5 }],
+        ['minimumRecommendedProductPrice -1', { minimumRecommendedProductPrice: -1 }],
+    ];
+    for (const [label, patch] of crossSellNumerics) {
+        const response = await putJson(`${url}/settings/cross-sell`, {
+            ...validCrossSell,
+            ...patch,
+        });
+        check(
+            `cross-sell: ${label} is rejected`,
+            response.status === 400,
+            `status=${response.status} message=${String(response.body.message)}`,
+        );
+    }
+
+    const nullMaximumPrice = await putJson(`${url}/settings/cross-sell`, {
+        ...validCrossSell,
+        maximumRecommendedProductPrice: null,
+    });
+    check(
+        'cross-sell: maximumRecommendedProductPrice null is preserved (means "no upper limit")',
+        nullMaximumPrice.status === 200 &&
+        (nullMaximumPrice.body.body as Record<string, unknown> | undefined)?.maximumRecommendedProductPrice === null,
+        `status=${nullMaximumPrice.status} body=${JSON.stringify(nullMaximumPrice.body.body)}`,
+    );
+
+    const stringEnabled = await putJson(`${url}/settings/cross-sell`, {
+        ...validCrossSell,
+        enabled: 'yes',
+    });
+    check(
+        "cross-sell: enabled 'yes' is rejected — Boolean('yes') used to silently read as TRUE",
+        stringEnabled.status === 400,
+        `status=${stringEnabled.status} message=${String(stringEnabled.body.message)}`,
+    );
+
+    /* ── shipping ───────────────────────────────────────────────────────────── */
+
+    const shipping = await putJson(`${url}/settings/shipping`, validShipping);
+    check(
+        'shipping: valid payload passes unchanged',
+        shipping.status === 200 && deepEqual(shipping.body.body, validShipping),
+        `status=${shipping.status} body=${JSON.stringify(shipping.body.body)}`,
+    );
+
+    const partialZone = await putJson(`${url}/settings/shipping`, {
+        zones: { inside_dhaka: { charge: 99 } },
+    });
+    check(
+        'shipping: a partial zone is accepted (the service merges each zone over its defaults)',
+        partialZone.status === 200 &&
+        deepEqual(partialZone.body.body, { zones: { inside_dhaka: { charge: 99 } } }),
+        `status=${partialZone.status} body=${JSON.stringify(partialZone.body.body)}`,
+    );
+
+    const shippingNumerics: Array<[string, Record<string, unknown>]> = [
+        ['inside_dhaka.charge -1', { zones: { inside_dhaka: { charge: -1 } } }],
+        ['outside_dhaka.estimatedMinDays -1', { zones: { outside_dhaka: { estimatedMinDays: -1 } } }],
+        ['freeDeliveryThreshold.minimumOrderValue -1', { freeDeliveryThreshold: { minimumOrderValue: -1 } }],
+    ];
+    for (const [label, patch] of shippingNumerics) {
+        const response = await putJson(`${url}/settings/shipping`, { ...validShipping, ...patch });
+        check(
+            `shipping: ${label} is rejected`,
+            response.status === 400,
+            `status=${response.status} message=${String(response.body.message)}`,
+        );
+    }
+
+    const unknownZone = await putJson(`${url}/settings/shipping`, {
+        ...validShipping,
+        zones: { ...validShipping.zones, bogus_zone: { charge: 0 } },
+    });
+    check(
+        'shipping: an unknown delivery zone key is stripped (the zone set is fixed)',
+        unknownZone.status === 200 &&
+        !JSON.stringify(unknownZone.body.body).includes('bogus_zone'),
+        `status=${unknownZone.status} body=${JSON.stringify(unknownZone.body.body)}`,
+    );
+
+    const stringLandmark = await putJson(`${url}/settings/shipping`, {
+        ...validShipping,
+        addressRequirements: { landmarkRequired: 'no' },
+    });
+    check(
+        "shipping: landmarkRequired 'no' is rejected — Boolean('no') used to silently read as TRUE",
+        stringLandmark.status === 400,
+        `status=${stringLandmark.status} message=${String(stringLandmark.body.message)}`,
+    );
+
+    /* ── inventory settings ─────────────────────────────────────────────────── */
+
+    const inventorySettings = await putJson(`${url}/settings/inventory`, {
+        defaultLowStockThreshold: 5,
+    });
+    check(
+        'inventory settings: valid payload passes unchanged',
+        inventorySettings.status === 200 &&
+        deepEqual(inventorySettings.body.body, { defaultLowStockThreshold: 5 }),
+        `status=${inventorySettings.status} body=${JSON.stringify(inventorySettings.body.body)}`,
+    );
+
+    const coercedThreshold = await putJson(`${url}/settings/inventory`, {
+        defaultLowStockThreshold: '7',
+    });
+    check(
+        "inventory settings: numeric string '7' is still coerced (numericField preserves Number())",
+        coercedThreshold.status === 200 &&
+        (coercedThreshold.body.body as Record<string, unknown> | undefined)?.defaultLowStockThreshold === 7,
+        `status=${coercedThreshold.status} body=${JSON.stringify(coercedThreshold.body.body)}`,
+    );
+
+    const missingThreshold = await putJson(`${url}/settings/inventory`, {});
+    checkValidationEnvelope(
+        'inventory settings: a missing defaultLowStockThreshold is rejected (it was already required by the service)',
+        missingThreshold,
+        VALIDATION_FAILURE_MESSAGE,
+        'body.defaultLowStockThreshold',
+    );
+
+    const inventoryThresholdCases: Array<[string, unknown]> = [
+        ['-1', -1],
+        ['2.5', 2.5],
+        ['"abc"', 'abc'],
+    ];
+    for (const [label, value] of inventoryThresholdCases) {
+        const response = await putJson(`${url}/settings/inventory`, {
+            defaultLowStockThreshold: value,
+        });
+        check(
+            `inventory settings: defaultLowStockThreshold ${label} is rejected`,
+            response.status === 400,
+            `status=${response.status} message=${String(response.body.message)}`,
+        );
+    }
+};
+
 const checkStripUnit = (): void => {
     console.log('\n=== 5. stripMongoOperatorsFrom() unit checks ===');
 
@@ -2437,6 +2748,42 @@ const PRODUCT_VALIDATED_ROUTES = [
     },
 ].map((route) => ({ ...route, file: 'product/product.routes.ts', routerName: 'router', subject: 'product' }));
 
+/** The four settings singletons. Each is a PUT on its own admin router. */
+const SETTINGS_VALIDATED_ROUTES = [
+    {
+        file: 'announcement/announcement.routes.ts',
+        routerName: 'adminAnnouncementRoutes',
+        method: 'put',
+        path: '/',
+        controller: 'updateAdminAnnouncementBar',
+        label: 'PUT /api/admin/announcement',
+    },
+    {
+        file: 'cross-sell/cross-sell.routes.ts',
+        routerName: 'adminCrossSellSettingsRoutes',
+        method: 'put',
+        path: '/cross-sell',
+        controller: 'updateAdminCrossSellSettings',
+        label: 'PUT /api/admin/settings/cross-sell',
+    },
+    {
+        file: 'shipping/shipping.routes.ts',
+        routerName: 'adminShippingSettingsRoutes',
+        method: 'put',
+        path: '/shipping',
+        controller: 'updateAdminShippingSettings',
+        label: 'PUT /api/admin/settings/shipping',
+    },
+    {
+        file: 'inventory/inventory.routes.ts',
+        routerName: 'adminInventorySettingsRoutes',
+        method: 'put',
+        path: '/inventory',
+        controller: 'updateAdminInventorySettings',
+        label: 'PUT /api/admin/settings/inventory',
+    },
+].map((route) => ({ ...route, subject: 'settings' }));
+
 /**
  * Parses `<routerName>.<method>('path', ...handlers)` registrations.
  *
@@ -2586,6 +2933,10 @@ const checkValidatedRoutes = (): void => {
     for (const spec of PRODUCT_VALIDATED_ROUTES) {
         assertValidateBeforeController(spec);
     }
+
+    for (const spec of SETTINGS_VALIDATED_ROUTES) {
+        assertValidateBeforeController(spec);
+    }
 };
 
 /**
@@ -2665,6 +3016,7 @@ const main = async (): Promise<void> => {
         await checkPromotionSchemas(url);
         await checkComboSchemas(url);
         await checkProductSchemas(url);
+        await checkSettingsSchemas(url);
     } finally {
         await new Promise<void>((resolve) => {
             server.close(() => resolve());

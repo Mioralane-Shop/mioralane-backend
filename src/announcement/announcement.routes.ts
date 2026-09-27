@@ -1,10 +1,12 @@
 import { Router, RequestHandler } from 'express';
 import { adminGuard } from '../middleware/auth.middleware';
+import { validate } from '../middleware/validate.middleware';
 import {
     getAdminAnnouncementBar,
     getPublicAnnouncementBar,
     updateAdminAnnouncementBar,
 } from './announcement.controller';
+import { announcementSettingsSchema } from './announcement.schemas';
 
 export const announcementPublicRoutes = Router();
 export const adminAnnouncementRoutes = Router();
@@ -17,4 +19,8 @@ announcementPublicRoutes.get('/', getPublicAnnouncementBar as RequestHandler);
 adminAnnouncementRoutes.use(...adminGuard);
 
 adminAnnouncementRoutes.get('/', getAdminAnnouncementBar as RequestHandler);
-adminAnnouncementRoutes.put('/', updateAdminAnnouncementBar as RequestHandler);
+adminAnnouncementRoutes.put(
+    '/',
+    validate({ body: announcementSettingsSchema }),
+    updateAdminAnnouncementBar as RequestHandler
+);
