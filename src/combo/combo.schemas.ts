@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { mediaAssetSchema } from '../media/media-upload.schemas';
 
 /**
  * Body schemas for the two admin combo mutations (`POST /api/combos`,
@@ -23,31 +24,6 @@ import { z } from 'zod';
  * reject data that is valid today.
  */
 
-/**
- * One `media` entry, mirroring `MediaAsset` / `MediaAssetSchema`. Every field is
- * optional here because the controller runs the array through
- * `normalizeMediaAssets()` (`media.schema.ts`), which discards non-objects and
- * entries without a string `url`, coerces every other field, and **rebuilds each
- * asset from scratch** — so no client-supplied key can reach the document.
- *
- * The shape still has to be declared (rather than `z.unknown()`), because
- * `Combo.create()` / `Combo.set()` are typed against the model and would otherwise
- * reject the parsed body. Declaring the field at all is also what stops Zod from
- * stripping `media` and silently breaking image uploads.
- */
-const mediaAssetField = z.object({
-    provider: z.literal('imagekit').optional(),
-    fileId: z.string().nullable().optional(),
-    url: z.string().optional(),
-    name: z.string().optional(),
-    width: z.number().optional(),
-    height: z.number().optional(),
-    size: z.number().optional(),
-    mimeType: z.string().optional(),
-    alt: z.string().optional(),
-    sortOrder: z.number().optional(),
-});
-
 const comboFields = {
     title: z.string().trim().min(1, 'Combo title is required').max(200),
     description: z.string().max(2000).optional(),
@@ -60,7 +36,7 @@ const comboFields = {
     concerns: z.array(z.string()).optional(),
     /** ImageKit URLs. Derived from `media` when `media` is non-empty. */
     images: z.array(z.string()).optional(),
-    media: z.array(mediaAssetField).optional(),
+    media: z.array(mediaAssetSchema).optional(),
     hoverImage: z.string().trim().optional(),
     size: z.string().trim().optional(),
     volume: z.string().trim().optional(),

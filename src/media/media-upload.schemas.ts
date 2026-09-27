@@ -17,6 +17,33 @@ export const MEDIA_ASSET_TYPES = [
 ] as const satisfies readonly MediaAssetType[];
 
 /**
+ * One stored media asset, mirroring `MediaAsset` / `MediaAssetSchema`. Single
+ * source of truth for every request body that carries a `media` array (products,
+ * combos), so the shape cannot drift between modules.
+ *
+ * Every field is optional because the controllers run the array through
+ * `normalizeMediaAssets()` (`media.schema.ts`), which discards non-objects and
+ * entries without a string `url`, coerces every other field, and **rebuilds each
+ * asset from scratch** — so no client-supplied key can reach a document. The shape
+ * still has to be declared concretely (rather than `z.unknown()`) because
+ * `Product.create()` / `Combo.set()` are typed against the model and would reject a
+ * loosely typed body. Declaring the field at all is also what stops Zod from
+ * stripping `media` and silently breaking image uploads.
+ */
+export const mediaAssetSchema = z.object({
+    provider: z.literal('imagekit').optional(),
+    fileId: z.string().nullable().optional(),
+    url: z.string().optional(),
+    name: z.string().optional(),
+    width: z.number().optional(),
+    height: z.number().optional(),
+    size: z.number().optional(),
+    mimeType: z.string().optional(),
+    alt: z.string().optional(),
+    sortOrder: z.number().optional(),
+});
+
+/**
  * Body of `POST /api/media/images` (multipart). `assetType` is the only field a
  * client may influence; the file itself is handled by multer.
  *

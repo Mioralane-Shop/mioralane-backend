@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { numericField, OBJECT_ID_PATTERN } from '../utils/validation';
+import { mediaAssetSchema } from '../media/media-upload.schemas';
 
 /**
  * Body schemas for the three product mutations:
@@ -30,20 +31,6 @@ import { numericField, OBJECT_ID_PATTERN } from '../utils/validation';
  * Fields that DO NOT EXIST on this model, and therefore have no schema entry:
  * `sku`, `barcode`, `soldCount`, and any SEO/meta fields.
  */
-
-/** Mirrors `MediaAsset` / `MediaAssetSchema`; `normalizeMediaAssets()` owns sanitising. */
-const mediaAssetField = z.object({
-    provider: z.literal('imagekit').optional(),
-    fileId: z.string().nullable().optional(),
-    url: z.string().optional(),
-    name: z.string().optional(),
-    width: z.number().optional(),
-    height: z.number().optional(),
-    size: z.number().optional(),
-    mimeType: z.string().optional(),
-    alt: z.string().optional(),
-    sortOrder: z.number().optional(),
-});
 
 /**
  * `lowStockThreshold` is `number | null` (null clears it — `normalizeOptionalLowStockThreshold`
@@ -107,7 +94,7 @@ const productFields = {
     /** Free-form in the model; the admin UI narrows it to Sale/Best/New. */
     badge: z.string().optional(),
     images: z.array(z.string()).optional(),
-    media: z.array(mediaAssetField).optional(),
+    media: z.array(mediaAssetSchema).optional(),
     hoverImage: z.string().optional(),
     volume: z.string().optional(),
     /** Routed through the inventory ledger on update, never `set()` directly. */
