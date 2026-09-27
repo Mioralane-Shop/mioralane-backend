@@ -1,5 +1,6 @@
 import { Router, RequestHandler } from 'express';
 import { adminGuard } from '../middleware/auth.middleware';
+import { validate } from '../middleware/validate.middleware';
 import {
   createProduct,
   deleteProduct,
@@ -9,6 +10,11 @@ import {
   markPreOrderArrived,
   updateProduct,
 } from './product.controller';
+import {
+  createProductSchema,
+  productArrivalSchema,
+  updateProductSchema,
+} from './product.schemas';
 
 const router = Router();
 
@@ -19,11 +25,18 @@ router.get('/:idOrSlug', getProductByIdOrSlug as RequestHandler);
 
 // Admin-only routes. This router also serves public GETs, so the guard is
 // applied per route — a router-level `use` would lock out the storefront.
-router.post('/', ...adminGuard, createProduct as RequestHandler);
+// `validate()` runs AFTER the guard on purpose: an unauthenticated caller should
+// get 401 from the guard, not a 400 that reveals the body contract.
+router.post('/', ...adminGuard, validate({ body: createProductSchema }), createProduct as RequestHandler);
 
-router.put('/:id', ...adminGuard, updateProduct as RequestHandler);
+router.put('/:id', ...adminGuard, validate({ body: updateProductSchema }), updateProduct as RequestHandler);
 
-router.patch('/:id/pre-order/arrive', ...adminGuard, markPreOrderArrived as RequestHandler);
+router.patch(
+  '/:id/pre-order/arrive',
+  ...adminGuard,
+  validate({ body: productArrivalSchema }),
+  markPreOrderArrived as RequestHandler
+);
 
 router.delete('/:id', ...adminGuard, deleteProduct as RequestHandler);
 

@@ -71,6 +71,11 @@ import {
     updateCouponSchema,
 } from '../src/promotion/promotion.schemas';
 import { createComboSchema, updateComboSchema } from '../src/combo/combo.schemas';
+import {
+    createProductSchema,
+    productArrivalSchema,
+    updateProductSchema,
+} from '../src/product/product.schemas';
 import type { AuthenticatedRequest } from '../src/middleware/auth.middleware';
 import multer from 'multer';
 
@@ -324,6 +329,13 @@ const buildApp = (): express.Application => {
     app.post('/combo/create', validate({ body: createComboSchema }), echo);
     app.put('/combo/update', validate({ body: updateComboSchema }), echo);
 
+    // Product schemas (P0-3.11). The real handlers run `sanitizeMutationBody()`
+    // (an allowlist filter) *after* `validate()`, so these echo routes exercise the
+    // schema layer; the filter itself is unchanged and still runs last.
+    app.post('/product/create', validate({ body: createProductSchema }), echo);
+    app.put('/product/update', validate({ body: updateProductSchema }), echo);
+    app.patch('/product/arrival', validate({ body: productArrivalSchema }), echo);
+
     // Everything below passes through the global operator strip first.
     app.use(stripMongoOperators);
 
@@ -354,7 +366,7 @@ const baseUrl = (server: Server): string => {
 type ApiResponse = { status: number; body: Record<string, unknown> };
 
 const sendJson = async (
-    method: 'POST' | 'PUT',
+    method: 'POST' | 'PUT' | 'PATCH',
     url: string,
     payload: Json,
 ): Promise<ApiResponse> => {
@@ -374,6 +386,10 @@ const postJson = async (url: string, payload: Json): Promise<ApiResponse> =>
 /** The promotion and campaign/coupon updates are PUTs, not POSTs. */
 const putJson = async (url: string, payload: Json): Promise<ApiResponse> =>
     sendJson('PUT', url, payload);
+
+/** `PATCH /api/products/:id/pre-order/arrive`. */
+const patchJson = async (url: string, payload: Json): Promise<ApiResponse> =>
+    sendJson('PATCH', url, payload);
 
 const getJson = async (url: string): Promise<ApiResponse> => {
     const response = await fetch(url, { signal: AbortSignal.timeout(5000) });
@@ -1790,6 +1806,274 @@ const checkComboSchemas = async (url: string): Promise<void> => {
     );
 };
 
+/** Minimal shape the admin product form sends for a create. */
+const validProductCreate = {
+    title: 'Vitamin C Serum',
+    brand: 'Mioralane',
+    category: 'serum',
+    description: 'Brightening serum',
+    price: 1200,
+    salePrice: 990,
+    stock: 25,
+    images: ['https://ik.imagekit.io/mioralane/products/a.png'],
+    skinType: ['Oily'],
+    skinConcern: ['Dullness'],
+    keyIngredients: [{ name: 'Vitamin C', benefit: 'Brightens' }],
+    isBestSeller: false,
+    isNewArrival: true,
+};
+
+const checkProductSchemas = async (url: string): Promise<void> => {
+    console.log('\n=== 4i. product schemas (P0-3.11) ===');
+
+    const valid = await postJson(`${url}/product/create`, validProductCreate);
+    check(
+        'product: valid create payload passes unchanged',
+        valid.status === 200 && deepEqual(valid.body.body, validProductCreate),
+        `status=${valid.status} body=${JSON.stringify(valid.body.body)}`,
+    );
+
+    const injectedTitle = await postJson(`${url}/product/create`, {
+        ...validProductCreate,
+        title: { $ne: null },
+    });
+    checkValidationEnvelope(
+        'product: operator title is rejected by Zod',
+        injectedTitle,
+        VALIDATION_FAILURE_MESSAGE,
+        'body.title',
+    );
+
+    /* ── mass assignment (the allowlist is the second layer) ──────────────────── */
+
+    const massAssignment = await postJson(`${url}/product/create`, {
+        ...validProductCreate,
+        rating: 5,
+        numReviews: 999,
+        _id: '507f1f77bcf86cd799439011',
+        id: '507f1f77bcf86cd799439012',
+        __v: 7,
+        createdAt: '2020-01-01T00:00:00.000Z',
+        updatedAt: '2020-01-01T00:00:00.000Z',
+    });
+    const massBody = JSON.stringify(massAssignment.body.body);
+    check(
+        'product: rating/numReviews/_id/id/__v/createdAt/updatedAt are all stripped',
+        massAssignment.status === 200 &&
+        deepEqual(massAssignment.body.body, validProductCreate) &&
+        !massBody.includes('999') &&
+        !massBody.includes('2020-01-01'),
+        `status=${massAssignment.status} body=${massBody}`,
+    );
+
+    /* ── slug MUST survive: resolveSlug() prefers it, and the admin sends it ─── */
+
+    const withSlug = await postJson(`${url}/product/create`, {
+        ...validProductCreate,
+        slug: 'custom-url-slug',
+    });
+    const slugValue = (withSlug.body.body as Record<string, unknown> | undefined)?.slug;
+    check(
+        "product: a client-supplied slug is NOT stripped — resolveSlug() prefers it and the admin sends one on every save",
+        withSlug.status === 200 && slugValue === 'custom-url-slug',
+        `status=${withSlug.status} slug=${JSON.stringify(slugValue)}`,
+    );
+
+    /* ── helper fields must survive ──────────────────────────────────────────── */
+
+    const withMedia = await postJson(`${url}/product/create`, {
+        ...validProductCreate,
+        media: [{ provider: 'imagekit', url: 'https://ik.imagekit.io/mioralane/products/b.png' }],
+        lowStockThreshold: 3,
+    });
+    const withMediaBody = withMedia.body.body as Record<string, unknown> | undefined;
+    check(
+        'product: media and lowStockThreshold are NOT stripped',
+        withMedia.status === 200 &&
+        Array.isArray(withMediaBody?.media) &&
+        (withMediaBody?.media as unknown[]).length === 1 &&
+        withMediaBody?.lowStockThreshold === 3,
+        `status=${withMedia.status} body=${JSON.stringify(withMedia.body.body)}`,
+    );
+
+    const clearedThreshold = await postJson(`${url}/product/create`, {
+        ...validProductCreate,
+        lowStockThreshold: null,
+    });
+    check(
+        'product: lowStockThreshold null is preserved (it clears the threshold)',
+        clearedThreshold.status === 200 &&
+        (clearedThreshold.body.body as Record<string, unknown> | undefined)?.lowStockThreshold === null,
+        `status=${clearedThreshold.status} body=${JSON.stringify(clearedThreshold.body.body)}`,
+    );
+
+    /* ── create requires the model's required fields ─────────────────────────── */
+
+    for (const field of ['title', 'brand', 'category', 'price']) {
+        const response = await postJson(`${url}/product/create`, {
+            ...validProductCreate,
+            [field]: undefined,
+        });
+        checkValidationEnvelope(
+            `product: create without ${field} is rejected`,
+            response,
+            VALIDATION_FAILURE_MESSAGE,
+            `body.${field}`,
+        );
+    }
+
+    /* ── numeric ranges ─────────────────────────────────────────────────────── */
+
+    const productNumericCases: Array<[string, Record<string, unknown>]> = [
+        ['price -1', { price: -1 }],
+        ['salePrice -1', { salePrice: -1 }],
+        ['stock -1', { stock: -1 }],
+        ['stock 1.5', { stock: 1.5 }],
+        ['lowStockThreshold -1', { lowStockThreshold: -1 }],
+        ['lowStockThreshold 2.5', { lowStockThreshold: 2.5 }],
+    ];
+    for (const [label, patch] of productNumericCases) {
+        const response = await postJson(`${url}/product/create`, { ...validProductCreate, ...patch });
+        check(
+            `product: ${label} is rejected`,
+            response.status === 400,
+            `status=${response.status} message=${String(response.body.message)}`,
+        );
+    }
+
+    const descriptionTooLong = await postJson(`${url}/product/create`, {
+        ...validProductCreate,
+        description: 'd'.repeat(2001),
+    });
+    check(
+        "product: description above the model's 2000-character cap is rejected",
+        descriptionTooLong.status === 400,
+        `status=${descriptionTooLong.status}`,
+    );
+
+    /* ── enums that DO exist in the model ───────────────────────────────────── */
+
+    const badAvailability = await postJson(`${url}/product/create`, {
+        ...validProductCreate,
+        availabilityMode: 'coming_soon',
+    });
+    check(
+        "product: availabilityMode 'coming_soon' is rejected (model enum: in_stock | pre_order)",
+        badAvailability.status === 400,
+        `status=${badAvailability.status} message=${String(badAvailability.body.message)}`,
+    );
+
+    const badPreOrderStatus = await postJson(`${url}/product/create`, {
+        ...validProductCreate,
+        availabilityMode: 'pre_order',
+        preOrder: { status: 'pending', expectedArrivalDate: '2026-03-01T00:00:00.000Z', quantityLimit: 10 },
+    });
+    check(
+        "product: preOrder.status 'pending' is rejected (model enum: accepting | closed | arrived)",
+        badPreOrderStatus.status === 400,
+        `status=${badPreOrderStatus.status} message=${String(badPreOrderStatus.body.message)}`,
+    );
+
+    const badArrivalDate = await postJson(`${url}/product/create`, {
+        ...validProductCreate,
+        availabilityMode: 'pre_order',
+        preOrder: { expectedArrivalDate: 'garbage', quantityLimit: 10 },
+    });
+    check(
+        'product: an unparseable preOrder.expectedArrivalDate is a clean 400',
+        badArrivalDate.status === 400,
+        `status=${badArrivalDate.status} message=${String(badArrivalDate.body.message)}`,
+    );
+
+    /* ── nested arrays ─────────────────────────────────────────────────────── */
+
+    const emptyIngredientName = await postJson(`${url}/product/create`, {
+        ...validProductCreate,
+        keyIngredients: [{ benefit: 'no name' }],
+    });
+    check(
+        'product: a key ingredient row without a name is rejected',
+        emptyIngredientName.status === 400,
+        `status=${emptyIngredientName.status} message=${String(emptyIngredientName.body.message)}`,
+    );
+
+    const badCrossSellId = await postJson(`${url}/product/create`, {
+        ...validProductCreate,
+        crossSellRecommendations: [{ productId: 'not-an-object-id' }],
+    });
+    checkValidationEnvelope(
+        'product: non-ObjectId crossSellRecommendations.productId is rejected',
+        badCrossSellId,
+        VALIDATION_FAILURE_MESSAGE,
+        'body.crossSellRecommendations',
+    );
+
+    const injectedCrossSellId = await postJson(`${url}/product/create`, {
+        ...validProductCreate,
+        crossSellRecommendations: [{ productId: { $ne: null } }],
+    });
+    checkValidationEnvelope(
+        'product: operator crossSellRecommendations.productId is rejected',
+        injectedCrossSellId,
+        VALIDATION_FAILURE_MESSAGE,
+        'body.crossSellRecommendations',
+    );
+
+    /* ── update: partial + the removed empty-string check ───────────────────── */
+
+    const partialUpdate = await putJson(`${url}/product/update`, { stock: 5 });
+    check(
+        'product: update accepts a partial body ({ stock: 5 } alone)',
+        partialUpdate.status === 200 && deepEqual(partialUpdate.body.body, { stock: 5 }),
+        `status=${partialUpdate.status} body=${JSON.stringify(partialUpdate.body.body)}`,
+    );
+
+    const emptyTitleUpdate = await putJson(`${url}/product/update`, { title: '   ' });
+    checkValidationEnvelope(
+        'product: update with a blank title is rejected (replaces the old "cannot be empty" 400)',
+        emptyTitleUpdate,
+        VALIDATION_FAILURE_MESSAGE,
+        'body.title',
+    );
+
+    /* ── PATCH pre-order arrival ────────────────────────────────────────────── */
+
+    const arrival = await patchJson(`${url}/product/arrival`, { actualReceivedQuantity: 40 });
+    check(
+        'product arrival: valid payload passes and is normalised to a number',
+        arrival.status === 200 &&
+        (arrival.body.body as Record<string, unknown> | undefined)?.actualReceivedQuantity === 40,
+        `status=${arrival.status} body=${JSON.stringify(arrival.body.body)}`,
+    );
+
+    const numericStringArrival = await patchJson(`${url}/product/arrival`, {
+        actualReceivedQuantity: '40',
+    });
+    check(
+        "product arrival: numeric string '40' is still coerced (numericField preserves the old Number())",
+        numericStringArrival.status === 200 &&
+        (numericStringArrival.body.body as Record<string, unknown> | undefined)?.actualReceivedQuantity === 40,
+        `status=${numericStringArrival.status} body=${JSON.stringify(numericStringArrival.body.body)}`,
+    );
+
+    const missingArrival = await patchJson(`${url}/product/arrival`, {});
+    checkValidationEnvelope(
+        'product arrival: missing actualReceivedQuantity is rejected',
+        missingArrival,
+        VALIDATION_FAILURE_MESSAGE,
+        'body.actualReceivedQuantity',
+    );
+
+    const negativeArrival = await patchJson(`${url}/product/arrival`, {
+        actualReceivedQuantity: -1,
+    });
+    check(
+        'product arrival: negative actualReceivedQuantity is rejected',
+        negativeArrival.status === 400,
+        `status=${negativeArrival.status} message=${String(negativeArrival.body.message)}`,
+    );
+};
+
 const checkStripUnit = (): void => {
     console.log('\n=== 5. stripMongoOperatorsFrom() unit checks ===');
 
@@ -2127,6 +2411,33 @@ const COMBO_VALIDATED_ROUTES = [
 ].map((route) => ({ ...route, file: 'combo/combo.routes.ts', routerName: 'router', subject: 'combo' }));
 
 /**
+ * The three product mutations. The router is mixed (public GETs) so guard and
+ * schema are per route, and `validate()` sits AFTER `...adminGuard`.
+ * `PATCH /:id/pre-order/arrive` is included because the handler does read a body
+ * (`actualReceivedQuantity`) — it is not a body-less action.
+ */
+const PRODUCT_VALIDATED_ROUTES = [
+    {
+        method: 'post',
+        path: '/',
+        controller: 'createProduct',
+        label: 'POST /api/products',
+    },
+    {
+        method: 'put',
+        path: '/:id',
+        controller: 'updateProduct',
+        label: 'PUT /api/products/:id',
+    },
+    {
+        method: 'patch',
+        path: '/:id/pre-order/arrive',
+        controller: 'markPreOrderArrived',
+        label: 'PATCH /api/products/:id/pre-order/arrive',
+    },
+].map((route) => ({ ...route, file: 'product/product.routes.ts', routerName: 'router', subject: 'product' }));
+
+/**
  * Parses `<routerName>.<method>('path', ...handlers)` registrations.
  *
  * `routerName` is a parameter because not every router is named `router` — the
@@ -2271,6 +2582,10 @@ const checkValidatedRoutes = (): void => {
     for (const spec of COMBO_VALIDATED_ROUTES) {
         assertValidateBeforeController(spec);
     }
+
+    for (const spec of PRODUCT_VALIDATED_ROUTES) {
+        assertValidateBeforeController(spec);
+    }
 };
 
 /**
@@ -2349,6 +2664,7 @@ const main = async (): Promise<void> => {
         await checkMediaSchema(url);
         await checkPromotionSchemas(url);
         await checkComboSchemas(url);
+        await checkProductSchemas(url);
     } finally {
         await new Promise<void>((resolve) => {
             server.close(() => resolve());

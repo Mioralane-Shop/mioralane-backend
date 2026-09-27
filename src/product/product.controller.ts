@@ -13,6 +13,11 @@ import {
   recordActivity,
   resolveUpdateAction,
 } from '../activity-log/activity-log.service';
+import type {
+  CreateProductInput,
+  ProductArrivalInput,
+  UpdateProductInput,
+} from './product.schemas';
 import {
   getCartCrossSellRecommendations,
   normalizeCrossSellRecommendations,
@@ -500,7 +505,7 @@ const formatProduct = (product: ProductAggregateRow): ProductAggregateRow => {
  */
 export const createProduct = async (req: Request, res: Response): Promise<void> => {
   try {
-    const body = sanitizeMutationBody((req.body ?? {}) as Record<string, unknown>);
+    const body = sanitizeMutationBody(req.body as CreateProductInput);
     normalizeProductMedia(body);
     normalizeSkincareFields(body);
     normalizeInventoryFields(body);
@@ -513,15 +518,10 @@ export const createProduct = async (req: Request, res: Response): Promise<void> 
       body.crossSellRecommendations = normalizedCrossSellRecommendations;
     }
 
-    // Validate required fields
-    if (!body.title || !body.brand || !body.category || body.price === undefined || body.price === null) {
-      res.status(400).json({
-        success: false,
-        message: 'Missing required fields: title, brand, category, price',
-      });
-      return;
-    }
-
+    // `title`, `brand`, `category` and `price` are guaranteed by
+    // `createProductSchema`, so the former "Missing required fields: title, brand,
+    // category, price" 400 was removed in P0-3.11 as unreachable. The images check
+    // below stays: `images` is optional because a payload may supply `media` only.
     if (!body.images || body.images.length === 0) {
       res.status(400).json({
         success: false,
@@ -647,7 +647,7 @@ export const updateProduct = async (req: Request, res: Response): Promise<void> 
     // Snapshot before any mutation so the audit trail can diff the edit.
     const productBeforeEdit = product.toObject();
 
-    const body = sanitizeMutationBody((req.body ?? {}) as Record<string, unknown>);
+    const body = sanitizeMutationBody(req.body as UpdateProductInput);
     normalizeProductMedia(body);
     normalizeSkincareFields(body);
     normalizeInventoryFields(body);
@@ -660,18 +660,9 @@ export const updateProduct = async (req: Request, res: Response): Promise<void> 
       body.crossSellRecommendations = normalizedCrossSellRecommendations;
     }
 
-    if (
-      (body.title !== undefined && body.title.trim() === '') ||
-      (body.brand !== undefined && body.brand.trim() === '') ||
-      (body.category !== undefined && body.category.trim() === '')
-    ) {
-      res.status(400).json({
-        success: false,
-        message: 'Title, brand, and category cannot be empty',
-      });
-      return;
-    }
-
+    // The former "Title, brand, and category cannot be empty" 400 was removed in
+    // P0-3.11: `title` / `brand` / `category` are `min(1)` after `.trim()` in the
+    // schema, so an empty string can no longer reach here.
     const nextSlug = resolveSlug(body, product.title);
 
     if (await findDuplicateSlug(nextSlug, id)) {
@@ -686,7 +677,9 @@ export const updateProduct = async (req: Request, res: Response): Promise<void> 
       body.preOrder.reservedQuantity = product.preOrder?.reservedQuantity ?? 0;
     }
 
-    const requestedStock = typeof body.stock === 'number' ? body.stock : undefined;
+    // `stock` is guaranteed to be a non-negative integer by the schema, so no
+    // typeof guard is needed to discover whether the client asked for a change.
+    const requestedStock = body.stock;
 
     // Stock is never written directly: every change goes through the inventory
     // ledger so the audit trail cannot be bypassed by a catalog edit.
@@ -900,21 +893,17 @@ export const markPreOrderArrived = async (req: Request, res: Response): Promise<
 
   try {
     const { id } = req.params as { id: string };
-    const actualReceivedQuantity = Number(req.body?.actualReceivedQuantity);
+    const { actualReceivedQuantity } = req.body as ProductArrivalInput;
 
     if (!isValidObjectId(id)) {
       res.status(400).json({ success: false, message: 'Invalid product ID' });
       return;
     }
 
-    if (!Number.isInteger(actualReceivedQuantity) || actualReceivedQuantity < 0) {
-      res.status(400).json({
-        success: false,
-        message: 'Actual quantity received must be a non-negative whole number',
-        code: 'invalid_received_quantity',
-      });
-      return;
-    }
+    // The former "Actual quantity received must be a non-negative whole number"
+    // 400 (code `invalid_received_quantity`) was removed in P0-3.11 as unreachable:
+    // `productArrivalSchema` enforces a non-negative integer and keeps the old
+    // `Number()` coercion via `numericField`.
 
     const product = await session.withTransaction(async () => {
       const current = await Product.findById(id).session(session).exec();
