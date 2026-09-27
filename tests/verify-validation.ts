@@ -53,6 +53,16 @@ import {
 import { createAddressSchema, updateAddressSchema } from '../src/address/address.schemas';
 import { createMyAddress } from '../src/address/address.controller';
 import { addToWishlistSchema } from '../src/wishlist/wishlist.schemas';
+import {
+    MAX_INVENTORY_NOTE_LENGTH,
+    MAX_INVENTORY_REASON_LENGTH,
+    MAX_STOCK_LEVEL,
+    inventoryOperationSchema,
+} from '../src/inventory/inventory.schemas';
+import {
+    adjustInventoryItem,
+    stockInInventoryItem,
+} from '../src/inventory/inventory.controller';
 import type { AuthenticatedRequest } from '../src/middleware/auth.middleware';
 
 type Json = unknown;
@@ -237,6 +247,25 @@ const buildApp = (): express.Application => {
     // Wishlist schema (P0-3.6). One echo route proves the schema; the static check
     // below proves both real POST routes carry it.
     app.post('/wishlist/add', validate({ body: addToWishlistSchema }), echo);
+
+    // Inventory schemas (P0-3.7). The six real routes share one schema, so one echo
+    // route covers the shape. `/inventory/stock-in-real` and `/inventory/adjust-real`
+    // run the real controller behind a stubbed req.user so the service's own
+    // "quantity is required" / "targetStock is required" 400s are exercised; both
+    // throw before `mongoose.startSession()`, so no database is reached.
+    app.post('/inventory/op', validate({ body: inventoryOperationSchema }), echo);
+    app.post(
+        '/inventory/stock-in-real',
+        stubAuth,
+        validate({ body: inventoryOperationSchema }),
+        stockInInventoryItem,
+    );
+    app.post(
+        '/inventory/adjust-real',
+        stubAuth,
+        validate({ body: inventoryOperationSchema }),
+        adjustInventoryItem,
+    );
 
     // Everything below passes through the global operator strip first.
     app.use(stripMongoOperators);
@@ -899,6 +928,168 @@ const checkWishlistSchema = async (url: string): Promise<void> => {
     );
 };
 
+/** The exact wire payload `inventory-action-dialog.tsx:113-119` sends for a delta action. */
+const validStockIn = {
+    itemType: 'product',
+    itemId: '507f1f77bcf86cd799439011',
+    quantity: 5,
+};
+
+const checkInventorySchemas = async (url: string): Promise<void> => {
+    console.log('\n=== 4e. inventory schemas (P0-3.7) ===');
+
+    const valid = await postJson(`${url}/inventory/op`, validStockIn);
+    check(
+        'inventory: valid stock-in payload passes unchanged',
+        valid.status === 200 && deepEqual(valid.body.body, validStockIn),
+        `status=${valid.status} body=${JSON.stringify(valid.body.body)}`,
+    );
+
+    const injectedItemId = await postJson(`${url}/inventory/op`, {
+        ...validStockIn,
+        itemId: { $ne: null },
+    });
+    checkValidationEnvelope(
+        'inventory: operator itemId is rejected by Zod',
+        injectedItemId,
+        VALIDATION_FAILURE_MESSAGE,
+        'body.itemId',
+    );
+
+    const injectedQuantity = await postJson(`${url}/inventory/op`, {
+        ...validStockIn,
+        quantity: { $ne: null },
+    });
+    checkValidationEnvelope(
+        'inventory: operator quantity is rejected by Zod (would have reached a stock $inc)',
+        injectedQuantity,
+        VALIDATION_FAILURE_MESSAGE,
+        'body.quantity',
+    );
+
+    const derivedFields = await postJson(`${url}/inventory/op`, {
+        ...validStockIn,
+        performedBy: 'someone-else',
+        actorId: '507f1f77bcf86cd799439012',
+        actorRole: 'admin',
+        transactionType: 'CANCELLATION_RESTORATION',
+        referenceType: 'Order',
+        referenceId: '507f1f77bcf86cd799439013',
+        _id: '507f1f77bcf86cd799439014',
+    });
+    const derivedBody = JSON.stringify(derivedFields.body.body);
+    check(
+        'inventory: performedBy/actor*/transactionType/reference*/_id are stripped — attribution stays server-derived',
+        derivedFields.status === 200 &&
+        deepEqual(derivedFields.body.body, validStockIn) &&
+        !derivedBody.includes('CANCELLATION_RESTORATION') &&
+        !derivedBody.includes('someone-else'),
+        `status=${derivedFields.status} body=${derivedBody}`,
+    );
+
+    const missingItemType = await postJson(`${url}/inventory/op`, {
+        itemId: validStockIn.itemId,
+        quantity: 5,
+    });
+    checkValidationEnvelope(
+        'inventory: itemType is required',
+        missingItemType,
+        VALIDATION_FAILURE_MESSAGE,
+        'body.itemType',
+    );
+
+    const bogusItemType = await postJson(`${url}/inventory/op`, {
+        ...validStockIn,
+        itemType: 'bogus',
+    });
+    check(
+        "inventory: itemType 'bogus' is rejected (required enum, unlike wishlist where it is optional)",
+        bogusItemType.status === 400,
+        `status=${bogusItemType.status} message=${String(bogusItemType.body.message)}`,
+    );
+
+    for (const quantity of [0, -1, 2.5, MAX_STOCK_LEVEL + 1]) {
+        const response = await postJson(`${url}/inventory/op`, { ...validStockIn, quantity });
+        check(
+            `inventory: quantity ${JSON.stringify(quantity)} is rejected`,
+            response.status === 400,
+            `status=${response.status} message=${String(response.body.message)}`,
+        );
+    }
+
+    const numericStringQuantity = await postJson(`${url}/inventory/op`, {
+        ...validStockIn,
+        quantity: '7',
+    });
+    const coercedQuantity = (
+        numericStringQuantity.body.body as Record<string, unknown> | undefined
+    )?.quantity;
+    check(
+        "inventory: numeric-string quantity '7' is still coerced to the number 7",
+        numericStringQuantity.status === 200 && coercedQuantity === 7,
+        `status=${numericStringQuantity.status} quantity=${String(coercedQuantity)}`,
+    );
+
+    const adjustZero = await postJson(`${url}/inventory/op`, {
+        itemType: 'combo',
+        itemId: validStockIn.itemId,
+        targetStock: 0,
+    });
+    check(
+        'inventory: adjust accepts targetStock 0 (non-negative, not positive)',
+        adjustZero.status === 200,
+        `status=${adjustZero.status} message=${String(adjustZero.body.message)}`,
+    );
+
+    const adjustNegative = await postJson(`${url}/inventory/op`, {
+        itemType: 'combo',
+        itemId: validStockIn.itemId,
+        targetStock: -3,
+    });
+    check(
+        'inventory: adjust rejects a negative targetStock',
+        adjustNegative.status === 400,
+        `status=${adjustNegative.status} message=${String(adjustNegative.body.message)}`,
+    );
+
+    const longReason = await postJson(`${url}/inventory/op`, {
+        ...validStockIn,
+        reason: 'r'.repeat(MAX_INVENTORY_REASON_LENGTH + 1),
+    });
+    const longNote = await postJson(`${url}/inventory/op`, {
+        ...validStockIn,
+        note: 'n'.repeat(MAX_INVENTORY_NOTE_LENGTH + 1),
+    });
+    check(
+        `inventory: reason above ${MAX_INVENTORY_REASON_LENGTH} and note above ${MAX_INVENTORY_NOTE_LENGTH} are rejected`,
+        longReason.status === 400 && longNote.status === 400,
+        `reason=${longReason.status} note=${longNote.status}`,
+    );
+
+    // The real controller: proves the service's per-transaction-type presence checks
+    // are still reachable and were NOT made dead by this schema.
+    const missingQuantity = await postJson(`${url}/inventory/stock-in-real`, {
+        itemType: 'product',
+        itemId: validStockIn.itemId,
+    });
+    check(
+        'inventory: stock-in without quantity still returns the service\'s exact "quantity is required" 400',
+        missingQuantity.status === 400 && missingQuantity.body.message === 'quantity is required',
+        `status=${missingQuantity.status} message=${String(missingQuantity.body.message)}`,
+    );
+
+    const missingTargetStock = await postJson(`${url}/inventory/adjust-real`, {
+        itemType: 'product',
+        itemId: validStockIn.itemId,
+    });
+    check(
+        'inventory: adjust without targetStock still returns the service\'s exact "targetStock is required for a manual adjustment" 400',
+        missingTargetStock.status === 400 &&
+        missingTargetStock.body.message === 'targetStock is required for a manual adjustment',
+        `status=${missingTargetStock.status} message=${String(missingTargetStock.body.message)}`,
+    );
+};
+
 const checkStripUnit = (): void => {
     console.log('\n=== 5. stripMongoOperatorsFrom() unit checks ===');
 
@@ -1159,15 +1350,41 @@ const WISHLIST_TOGGLE_VALIDATED_ROUTE = {
     controller: 'toggleWishlist',
 };
 
-/** Parses `router.<method>('path', ...handlers)` registrations without regex. */
+/**
+ * All six manual stock operations. They live on `adminInventoryRoutes` (mounted at
+ * `/api/admin/inventory`), not on a router literally named `router`.
+ */
+const INVENTORY_VALIDATED_ROUTES = [
+    { path: '/stock-in', controller: 'stockInInventoryItem' },
+    { path: '/restock', controller: 'restockInventoryItem' },
+    { path: '/stock-out', controller: 'stockOutInventoryItem' },
+    { path: '/adjust', controller: 'adjustInventoryItem' },
+    { path: '/damaged', controller: 'markInventoryDamaged' },
+    { path: '/lost', controller: 'markInventoryLost' },
+].map((route) => ({
+    ...route,
+    file: 'inventory/inventory.routes.ts',
+    method: 'post',
+    routerName: 'adminInventoryRoutes',
+    subject: 'inventory',
+    label: `POST /api/admin/inventory${route.path}`,
+}));
+
+/**
+ * Parses `<routerName>.<method>('path', ...handlers)` registrations.
+ *
+ * `routerName` is a parameter because not every router is named `router` — the
+ * inventory routes are registered on `adminInventoryRoutes`.
+ */
 const parseRouterRegistrations = (
     source: string,
+    routerName = 'router',
 ): Array<{ method: string; path: string; args: string }> => {
     const methods = ['get', 'post', 'put', 'patch', 'delete'];
     const routes: Array<{ method: string; path: string; args: string }> = [];
 
     for (const method of methods) {
-        const needle = `router.${method}(`;
+        const needle = `${routerName}.${method}(`;
         let index = source.indexOf(needle);
 
         while (index !== -1) {
@@ -1208,6 +1425,8 @@ type ValidatedRouteSpec = {
     method: string;
     path: string;
     controller: string;
+    /** Router identifier in the source file; defaults to `router`. */
+    routerName?: string;
     /** Used in the failure message, e.g. `order route POST /api/orders lost ...`. */
     subject: string;
     /** Human-readable label for log output. */
@@ -1221,7 +1440,7 @@ type ValidatedRouteSpec = {
  */
 const assertValidateBeforeController = (spec: ValidatedRouteSpec): void => {
     const source = readFileSync(join(__dirname, '..', 'src', spec.file), 'utf8');
-    const registration = parseRouterRegistrations(source).find(
+    const registration = parseRouterRegistrations(source, spec.routerName ?? 'router').find(
         (route) => route.method === spec.method && route.path === spec.path,
     );
 
@@ -1284,6 +1503,10 @@ const checkValidatedRoutes = (): void => {
         subject: 'wishlist toggle',
         label: 'POST /api/wishlist/toggle',
     });
+
+    for (const spec of INVENTORY_VALIDATED_ROUTES) {
+        assertValidateBeforeController(spec);
+    }
 };
 
 const main = async (): Promise<void> => {
@@ -1298,6 +1521,7 @@ const main = async (): Promise<void> => {
         await checkReviewSchema(url);
         await checkAddressSchemas(url);
         await checkWishlistSchema(url);
+        await checkInventorySchemas(url);
     } finally {
         await new Promise<void>((resolve) => {
             server.close(() => resolve());

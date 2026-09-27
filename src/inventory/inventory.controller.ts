@@ -7,7 +7,6 @@ import {
 } from './inventory-transaction.model';
 import {
   applyManualInventoryOperation,
-  createInventoryTransactionError,
   getInventoryItemSnapshot,
   getInventoryTransactionById,
   listInventoryTransactions,
@@ -20,6 +19,7 @@ import {
   recordActivity,
   resolveUpdateAction,
 } from '../activity-log/activity-log.service';
+import type { InventoryOperationInput } from './inventory.schemas';
 
 export const getAdminInventorySettings = async (
   _req: AuthenticatedRequest,
@@ -185,22 +185,22 @@ const performInventoryAction =
   (action: string) =>
     async (req: AuthenticatedRequest, res: Response): Promise<void> => {
       try {
-        const body = (req.body ?? {}) as Record<string, unknown>;
+        const body = req.body as InventoryOperationInput;
         const itemType: InventoryItemType = normalizeInventoryItemType(body.itemType);
-        const itemId = typeof body.itemId === 'string' ? body.itemId.trim() : '';
-
-        if (!itemId) {
-          throw createInventoryTransactionError(400, 'itemId is required', 'invalid_inventory_id');
-        }
+        // `itemId` is already guaranteed non-empty and trimmed by
+        // `inventoryOperationSchema`, so the former
+        // `typeof body.itemId === 'string' ? body.itemId.trim() : ''` plus its
+        // "itemId is required" throw were removed in P0-3.7 as unreachable.
+        const itemId = body.itemId;
 
         const movement = await applyManualInventoryOperation({
           itemType,
           itemId,
           transactionType: INVENTORY_ACTION_TYPES[action],
-          quantity: body.quantity as number | undefined,
-          targetStock: body.targetStock as number | undefined,
-          reason: typeof body.reason === 'string' ? body.reason : undefined,
-          note: typeof body.note === 'string' ? body.note : undefined,
+          quantity: body.quantity,
+          targetStock: body.targetStock,
+          reason: body.reason,
+          note: body.note,
           actorId: req.user.id,
           actorRole: 'admin',
         });

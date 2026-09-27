@@ -1,5 +1,6 @@
 import { Router, RequestHandler } from 'express';
 import { adminGuard } from '../middleware/auth.middleware';
+import { validate } from '../middleware/validate.middleware';
 import {
   adjustInventoryItem,
   getAdminInventorySettings,
@@ -13,6 +14,7 @@ import {
   stockOutInventoryItem,
   updateAdminInventorySettings,
 } from './inventory.controller';
+import { inventoryOperationSchema } from './inventory.schemas';
 
 export const adminInventorySettingsRoutes = Router();
 
@@ -31,11 +33,35 @@ adminInventoryRoutes.use(...adminGuard);
 adminInventoryRoutes.get('/transactions', listInventoryTransactionHistory as RequestHandler);
 adminInventoryRoutes.get('/transactions/:id', getInventoryTransaction as RequestHandler);
 
-adminInventoryRoutes.post('/stock-in', stockInInventoryItem as RequestHandler);
-adminInventoryRoutes.post('/restock', restockInventoryItem as RequestHandler);
-adminInventoryRoutes.post('/stock-out', stockOutInventoryItem as RequestHandler);
-adminInventoryRoutes.post('/adjust', adjustInventoryItem as RequestHandler);
-adminInventoryRoutes.post('/damaged', markInventoryDamaged as RequestHandler);
-adminInventoryRoutes.post('/lost', markInventoryLost as RequestHandler);
+adminInventoryRoutes.post(
+  '/stock-in',
+  validate({ body: inventoryOperationSchema }),
+  stockInInventoryItem as RequestHandler
+);
+adminInventoryRoutes.post(
+  '/restock',
+  validate({ body: inventoryOperationSchema }),
+  restockInventoryItem as RequestHandler
+);
+adminInventoryRoutes.post(
+  '/stock-out',
+  validate({ body: inventoryOperationSchema }),
+  stockOutInventoryItem as RequestHandler
+);
+adminInventoryRoutes.post(
+  '/adjust',
+  validate({ body: inventoryOperationSchema }),
+  adjustInventoryItem as RequestHandler
+);
+adminInventoryRoutes.post(
+  '/damaged',
+  validate({ body: inventoryOperationSchema }),
+  markInventoryDamaged as RequestHandler
+);
+adminInventoryRoutes.post(
+  '/lost',
+  validate({ body: inventoryOperationSchema }),
+  markInventoryLost as RequestHandler
+);
 
 adminInventoryRoutes.get('/:itemType/:itemId/history', getInventoryItemHistory as RequestHandler);

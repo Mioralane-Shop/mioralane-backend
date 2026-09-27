@@ -23,6 +23,20 @@ export const numericField = (
 ): z.ZodType<number> => z.preprocess(emptyStringToUndefined, constraints);
 
 /**
+ * Like {@link numericField}, but the field itself may be absent.
+ *
+ * `.optional()` must be applied to the CONSTRAINTS, inside the preprocess:
+ * `numericField(...).optional()` does not work, because the preprocess runs first
+ * and `z.coerce.number()` turns `undefined` into `NaN`, which the outer optional
+ * wrapper then rejects anyway. `''` counts as absent, matching the controllers
+ * that already read a cleared input as "not supplied".
+ */
+export const optionalNumericField = (
+  constraints: z.ZodType<number> = z.coerce.number()
+): z.ZodType<number | undefined> =>
+  z.preprocess(emptyStringToUndefined, constraints.optional());
+
+/**
  * Exactly 24 hex characters — the only string form Mongoose accepts for an
  * ObjectId. Single source of truth for every schema that turns a client-supplied
  * id into a database query, so no schema can drift to a subtly weaker pattern
