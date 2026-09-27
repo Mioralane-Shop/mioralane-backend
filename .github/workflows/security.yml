@@ -36,22 +36,25 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # Node 20 — the LTS line. Nothing in the repo pinned Node before this (no
-      # `engines`, no `.nvmrc`, no `packageManager`), while local development runs
-      # v24.9.0, so a version skew exists by design.
+      # Node 24 — the LTS line, and the same major local development runs (v24.9.0),
+      # so CI and a developer's machine agree. This previously targeted 20, which
+      # ran the whole suite on a major nobody develops against; a skew like that is
+      # exactly how CI passes while local work breaks, or the reverse.
       #
-      # The major line rather than an exact patch: `'20'` resolves to the newest
-      # published 20.x on the runner, so CI keeps running and still picks up 20.x
-      # security releases. The cost is that the toolchain is no longer pinned
-      # byte-for-byte — an exact version can be substituted here if that guarantee
-      # is wanted and the runner can resolve it.
+      # The major line rather than an exact patch: `'24'` resolves to the newest
+      # published 24.x on the runner (24.21.0 as of writing), so CI keeps running
+      # and still picks up 24.x security releases. The cost is that the toolchain is
+      # not pinned byte-for-byte — an exact version can be substituted here if that
+      # guarantee is wanted and the runner can resolve it.
       #
-      # 20 clears the highest requirement in the monorepo: the admin app is on
-      # Next 16, which needs >= 20.9.
+      # 24 clears every requirement in the monorepo: the admin app is on Next 16
+      # (needs >= 20.9) and the storefront on Next 14 (needs >= 18.17). Every command
+      # in this workflow was run locally on v24.9.0 before it was committed, so this
+      # names the major those runs actually used.
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '24'
           cache: npm
 
       - name: Install dependencies
