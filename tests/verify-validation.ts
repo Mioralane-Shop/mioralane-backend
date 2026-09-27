@@ -70,6 +70,7 @@ import {
     updateCampaignSchema,
     updateCouponSchema,
 } from '../src/promotion/promotion.schemas';
+import { createComboSchema, updateComboSchema } from '../src/combo/combo.schemas';
 import type { AuthenticatedRequest } from '../src/middleware/auth.middleware';
 import multer from 'multer';
 
@@ -317,6 +318,11 @@ const buildApp = (): express.Application => {
     app.put('/promotion/campaign', validate({ body: updateCampaignSchema }), echo);
     app.post('/promotion/coupon', validate({ body: createCouponSchema }), echo);
     app.put('/promotion/coupon', validate({ body: updateCouponSchema }), echo);
+
+    // Combo schemas (P0-3.10). The real router is mixed (public GETs), so the guard
+    // and the schema are applied per route; these echo routes cover the schemas.
+    app.post('/combo/create', validate({ body: createComboSchema }), echo);
+    app.put('/combo/update', validate({ body: updateComboSchema }), echo);
 
     // Everything below passes through the global operator strip first.
     app.use(stripMongoOperators);
@@ -1599,6 +1605,191 @@ const checkPromotionSchemas = async (url: string): Promise<void> => {
     );
 };
 
+/** Minimal shape the admin combo form sends for a create. */
+const validComboCreate = {
+    title: 'Glass Skin Bundle',
+    description: 'Five piece routine',
+    badge: 'MORNING PACK',
+    routineTag: 'For Glass Skin',
+    price: 2400,
+    compareAtPrice: 3000,
+    includedItems: ['Cleanser', 'Toner', 'Serum'],
+    concerns: ['Complete Routine'],
+    images: ['https://ik.imagekit.io/mioralane/combos/a.png'],
+    stock: 12,
+    skinType: 'All skin types',
+    isBestSeller: true,
+    isNewArrival: false,
+};
+
+const checkComboSchemas = async (url: string): Promise<void> => {
+    console.log('\n=== 4h. combo schemas (P0-3.10) ===');
+
+    const valid = await postJson(`${url}/combo/create`, validComboCreate);
+    check(
+        'combo: valid create payload passes unchanged',
+        valid.status === 200 && deepEqual(valid.body.body, validComboCreate),
+        `status=${valid.status} body=${JSON.stringify(valid.body.body)}`,
+    );
+
+    const injectedTitle = await postJson(`${url}/combo/create`, {
+        ...validComboCreate,
+        title: { $ne: null },
+    });
+    checkValidationEnvelope(
+        'combo: operator title is rejected by Zod',
+        injectedTitle,
+        VALIDATION_FAILURE_MESSAGE,
+        'body.title',
+    );
+
+    /* ── mass assignment: the point of this block ─────────────────────────────── */
+
+    const massAssignment = await postJson(`${url}/combo/create`, {
+        ...validComboCreate,
+        _id: '507f1f77bcf86cd799439011',
+        id: '507f1f77bcf86cd799439012',
+        __v: 7,
+        createdAt: '2020-01-01T00:00:00.000Z',
+        updatedAt: '2020-01-01T00:00:00.000Z',
+        slug: 'attacker-chosen-slug',
+        rating: 5,
+        numReviews: 999,
+        savings: 999999,
+    });
+    const massBody = JSON.stringify(massAssignment.body.body);
+    check(
+        'combo: slug/rating/numReviews/savings/_id/id/__v/createdAt/updatedAt are all stripped',
+        massAssignment.status === 200 &&
+        deepEqual(massAssignment.body.body, validComboCreate) &&
+        !massBody.includes('attacker-chosen-slug') &&
+        !massBody.includes('999999') &&
+        !massBody.includes('2020-01-01'),
+        `status=${massAssignment.status} body=${massBody}`,
+    );
+
+    /* ── helper fields must SURVIVE, or uploads/images silently stop working ──── */
+
+    const withMedia = await postJson(`${url}/combo/create`, {
+        ...validComboCreate,
+        media: [{ provider: 'imagekit', url: 'https://ik.imagekit.io/mioralane/combos/b.png', alt: 'x' }],
+    });
+    const withMediaBody = withMedia.body.body as Record<string, unknown> | undefined;
+    check(
+        'combo: media and images are NOT stripped (declaring them is what keeps uploads working)',
+        withMedia.status === 200 &&
+        Array.isArray(withMediaBody?.media) &&
+        (withMediaBody?.media as unknown[]).length === 1 &&
+        Array.isArray(withMediaBody?.images),
+        `status=${withMedia.status} body=${JSON.stringify(withMedia.body.body)}`,
+    );
+
+    /* ── required + numeric ranges ───────────────────────────────────────────── */
+
+    const missingTitle = await postJson(`${url}/combo/create`, {
+        ...validComboCreate,
+        title: undefined,
+    });
+    checkValidationEnvelope(
+        'combo: create without title is rejected',
+        missingTitle,
+        VALIDATION_FAILURE_MESSAGE,
+        'body.title',
+    );
+
+    const missingPrice = await postJson(`${url}/combo/create`, {
+        ...validComboCreate,
+        price: undefined,
+    });
+    checkValidationEnvelope(
+        'combo: create without price is rejected',
+        missingPrice,
+        VALIDATION_FAILURE_MESSAGE,
+        'body.price',
+    );
+
+    const comboNumericCases: Array<[string, Record<string, unknown>]> = [
+        ['price -1', { price: -1 }],
+        ['compareAtPrice -1', { compareAtPrice: -1 }],
+        ['stock -1', { stock: -1 }],
+        ['stock 1.5', { stock: 1.5 }],
+    ];
+    for (const [label, patch] of comboNumericCases) {
+        const response = await postJson(`${url}/combo/create`, { ...validComboCreate, ...patch });
+        check(
+            `combo: ${label} is rejected`,
+            response.status === 400,
+            `status=${response.status} message=${String(response.body.message)}`,
+        );
+    }
+
+    const descriptionTooLong = await postJson(`${url}/combo/create`, {
+        ...validComboCreate,
+        description: 'd'.repeat(2001),
+    });
+    check(
+        'combo: description above the model\'s 2000-character cap is rejected',
+        descriptionTooLong.status === 400,
+        `status=${descriptionTooLong.status} message=${String(descriptionTooLong.body.message)}`,
+    );
+
+    /* ── arrays ─────────────────────────────────────────────────────────────── */
+
+    const injectedIncludedItems = await postJson(`${url}/combo/create`, {
+        ...validComboCreate,
+        includedItems: [{ $ne: null }],
+    });
+    checkValidationEnvelope(
+        'combo: operator value inside includedItems is rejected',
+        injectedIncludedItems,
+        VALIDATION_FAILURE_MESSAGE,
+        'body.includedItems',
+    );
+
+    const nonStringImages = await postJson(`${url}/combo/create`, {
+        ...validComboCreate,
+        images: [123],
+    });
+    check(
+        'combo: non-string image entry is rejected (Mongoose would have silently cast it)',
+        nonStringImages.status === 400,
+        `status=${nonStringImages.status} message=${String(nonStringImages.body.message)}`,
+    );
+
+    /* ── update: partial patch + same server-owned field stripping ──────────── */
+
+    const partialStockUpdate = await putJson(`${url}/combo/update`, { stock: 5 });
+    check(
+        'combo: update accepts a partial body ({ stock: 5 } alone)',
+        partialStockUpdate.status === 200 && deepEqual(partialStockUpdate.body.body, { stock: 5 }),
+        `status=${partialStockUpdate.status} body=${JSON.stringify(partialStockUpdate.body.body)}`,
+    );
+
+    const updateMassAssignment = await putJson(`${url}/combo/update`, {
+        title: 'Renamed',
+        slug: 'attacker-chosen-slug',
+        rating: 5,
+        numReviews: 999,
+        savings: 999999,
+        category: 'not-a-combo',
+        brand: 'Attacker Brand',
+    });
+    const updateMassBody = JSON.stringify(updateMassAssignment.body.body);
+    check(
+        'combo: update strips slug/rating/numReviews/savings and cannot change category/brand (not in the allowlist)',
+        updateMassAssignment.status === 200 &&
+        deepEqual(updateMassAssignment.body.body, { title: 'Renamed' }),
+        `status=${updateMassAssignment.status} body=${updateMassBody}`,
+    );
+
+    const badBoolean = await putJson(`${url}/combo/update`, { isBestSeller: 'yes' });
+    check(
+        'combo: update rejects a non-boolean isBestSeller',
+        badBoolean.status === 400,
+        `status=${badBoolean.status} message=${String(badBoolean.body.message)}`,
+    );
+};
+
 const checkStripUnit = (): void => {
     console.log('\n=== 5. stripMongoOperatorsFrom() unit checks ===');
 
@@ -1916,6 +2107,26 @@ const PROMOTION_VALIDATED_ROUTES = [
 ].map((route) => ({ ...route, file: 'promotion/promotion.routes.ts', subject: 'promotion' }));
 
 /**
+ * The combo router is mixed (public GETs, admin mutations), so the guard and the
+ * schema are per route. `validate()` sits AFTER `...adminGuard` on purpose: an
+ * unauthenticated caller should get 401, not a 400 that leaks the body contract.
+ */
+const COMBO_VALIDATED_ROUTES = [
+    {
+        method: 'post',
+        path: '/',
+        controller: 'createCombo',
+        label: 'POST /api/combos',
+    },
+    {
+        method: 'put',
+        path: '/:id',
+        controller: 'updateCombo',
+        label: 'PUT /api/combos/:id',
+    },
+].map((route) => ({ ...route, file: 'combo/combo.routes.ts', routerName: 'router', subject: 'combo' }));
+
+/**
  * Parses `<routerName>.<method>('path', ...handlers)` registrations.
  *
  * `routerName` is a parameter because not every router is named `router` — the
@@ -2056,6 +2267,10 @@ const checkValidatedRoutes = (): void => {
     for (const spec of PROMOTION_VALIDATED_ROUTES) {
         assertValidateBeforeController(spec);
     }
+
+    for (const spec of COMBO_VALIDATED_ROUTES) {
+        assertValidateBeforeController(spec);
+    }
 };
 
 /**
@@ -2133,6 +2348,7 @@ const main = async (): Promise<void> => {
         await checkInventorySchemas(url);
         await checkMediaSchema(url);
         await checkPromotionSchemas(url);
+        await checkComboSchemas(url);
     } finally {
         await new Promise<void>((resolve) => {
             server.close(() => resolve());
