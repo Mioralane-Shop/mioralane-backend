@@ -200,6 +200,19 @@ const stubAuth: RequestHandler = (req, _res, next) => {
 };
 
 /**
+ * Narrows an `AuthenticatedRequest` controller to the plain `RequestHandler`
+ * Express accepts.
+ *
+ * Type-level only and erased at compile time — the same cast `adminGuard` uses in
+ * `auth.middleware.ts`. It is needed because `AuthenticatedRequest` widens the
+ * handler's parameter to one that *requires* `req.user`, and under
+ * `strictFunctionTypes` a function that needs more on its parameter is not
+ * assignable to one accepting any `Request`. Registering `stubAuth` ahead of each
+ * controller below is what makes the narrowed parameter true at runtime.
+ */
+const asHandler = (handler: unknown): RequestHandler => handler as RequestHandler;
+
+/**
  * Mirrors the real upload chain's shape: multer FIRST (it is what populates
  * `req.body` for a multipart request), then `validate()`. The harness cannot reuse
  * the route file's private `handleSingleUpload`, so the ordering guarantee for the
@@ -262,7 +275,7 @@ const buildApp = (): express.Application => {
         '/order/create-real',
         stubAuth,
         validate({ body: createOrderSchema }),
-        createOrder,
+        asHandler(createOrder),
     );
 
     // Review schema (P0-3.4).
@@ -278,7 +291,7 @@ const buildApp = (): express.Application => {
         '/address/create-real',
         stubAuth,
         validate({ body: createAddressSchema }),
-        createMyAddress,
+        asHandler(createMyAddress),
     );
 
     // Wishlist schema (P0-3.6). One echo route proves the schema; the static check
@@ -295,13 +308,13 @@ const buildApp = (): express.Application => {
         '/inventory/stock-in-real',
         stubAuth,
         validate({ body: inventoryOperationSchema }),
-        stockInInventoryItem,
+        asHandler(stockInInventoryItem),
     );
     app.post(
         '/inventory/adjust-real',
         stubAuth,
         validate({ body: inventoryOperationSchema }),
-        adjustInventoryItem,
+        asHandler(adjustInventoryItem),
     );
 
     // Media schema (P0-3.8). Two routes: a JSON one for the schema itself, and a

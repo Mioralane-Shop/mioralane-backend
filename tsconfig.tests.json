@@ -1,0 +1,11 @@
+{
+  "//": "Type-checks the verification harnesses. `tsconfig.json` includes only src/**, so tests/ was never type-checked — which is how five real errors (four of them strictFunctionTypes violations) lived in tests/verify-validation.ts while `npx tsc --noEmit` stayed green. Run with: npm run verify:types",
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "declaration": false,
+    "incremental": false,
+    "rootDir": "."
+  },
+  "include": ["src/**/*", "tests/**/*"]
+}
