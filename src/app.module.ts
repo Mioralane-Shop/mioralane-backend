@@ -30,6 +30,7 @@ import reviewRoutes from './review/review.routes';
 import adminReviewRoutes from './review/admin-review.routes';
 import { authLimiter } from './middleware/rateLimiter.middleware';
 import { csrfOriginGuard } from './middleware/csrf.middleware';
+import { stripMongoOperators } from './middleware/strip-mongo-operators.middleware';
 import { getAllowedOrigins } from './config/allowed-origins';
 import { swaggerSpec, swaggerServe, swaggerSetup } from './swagger';
 
@@ -60,6 +61,12 @@ const createApp = (): express.Application => {
   );
 
   app.use(express.json());
+
+  // Defence-in-depth against NoSQL operator injection: drop `$`-prefixed and
+  // dotted keys from user input before any route (or the DB middleware) sees it.
+  // The Zod schemas on individual routes are the primary control.
+  app.use(stripMongoOperators);
+
   app.use(cookieParser());
 
   // Reject cross-site state-changing requests before they reach the DB

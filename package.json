@@ -11,6 +11,7 @@
     "start:prod": "node -r tsconfig-paths/register dist/main",
     "dev": "tsx watch src/main.ts",
     "verify:route-guards": "tsx tests/verify-admin-route-guards.ts",
+    "verify:validation": "tsx tests/verify-validation.ts",
     "seed:combos": "tsx src/scripts/seed-combos.ts",
     "migrate:wishlist": "tsx src/scripts/migrate-user-wishlist.ts",
     "migrate:wishlist-items": "tsx src/scripts/migrate-wishlist-items.ts"
@@ -45,7 +46,8 @@
     "swagger-jsdoc": "^6.3.0",
     "swagger-ui-express": "^5.0.1",
     "tsconfig-paths": "^4.2.0",
-    "typeorm": "^0.3.20"
+    "typeorm": "^0.3.20",
+    "zod": "^4.6.5"
   },
   "devDependencies": {
     "@nestjs/cli": "^10.4.9",
