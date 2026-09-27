@@ -6,6 +6,7 @@ import { OAuth2Client } from 'google-auth-library';
 import { UserModel } from './user.model';
 import type { LoginUserInput, RegisterUserInput } from './auth.schemas';
 import { recordActivity } from '../activity-log/activity-log.service';
+import { createCsrfToken } from '../middleware/csrf-token.middleware';
 import {
   JWT_ALGORITHM,
   JWT_AUDIENCE,
@@ -224,6 +225,9 @@ export const registerUser = async (req: Request, res: Response): Promise<void> =
       success: true,
       message: 'User registered successfully',
       token,
+      // Same token the client will echo back as `X-CSRF-Token` (P1.1). Derived
+      // from the session that was just issued, so it needs no server state.
+      csrfToken: createCsrfToken(token),
       user: {
         id: user._id,
         username: user.username,
@@ -355,6 +359,9 @@ export const loginUser = async (req: Request, res: Response): Promise<void> => {
     res.status(200).json({
       success: true,
       token,
+      // See registerUser: HMAC of the session token, echoed back as
+      // `X-CSRF-Token` on state-changing requests.
+      csrfToken: createCsrfToken(token),
       user: {
         id: user._id,
         username: user.username,
@@ -475,6 +482,9 @@ export const googleLogin = async (req: Request, res: Response): Promise<void> =>
     res.status(200).json({
       success: true,
       token,
+      // See registerUser: HMAC of the session token, echoed back as
+      // `X-CSRF-Token` on state-changing requests.
+      csrfToken: createCsrfToken(token),
       user: {
         id: user._id,
         username: user.username,

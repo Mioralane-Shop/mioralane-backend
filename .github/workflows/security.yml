@@ -79,5 +79,11 @@ jobs:
       - name: Verify security headers, CORS, trust proxy and rate limits
         run: npm run verify:security-headers
 
+      # P1.1. Runs the real middleware chain: the HMAC token guard, its four
+      # negative controls, the auth-bootstrap exemptions and the CORS
+      # `Access-Control-Allow-Headers` contract the browser depends on.
+      - name: Verify CSRF token guard
+        run: npm run verify:csrf
+
       - name: Verify admin route guards
         run: npm run verify:route-guards

@@ -21,7 +21,11 @@ import { isAllowedOrigin } from '../config/allowed-origins';
  * Known limitation: browsers do not let a page suppress `Origin` on a
  * cross-site request, so rule 3 is not a browser bypass — but it does mean
  * this guard alone would not stop a future client that omits both headers.
- * A double-submit CSRF token remains the follow-up hardening step.
+ *
+ * That gap is closed by `csrf-token.middleware.ts` (P1.1), which runs directly
+ * after this guard and requires a session-bound HMAC token on the same
+ * requests. This guard is deliberately unchanged by it: a request that fails
+ * here is rejected before the token is ever looked at.
  */
 
 const STATE_CHANGING_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);

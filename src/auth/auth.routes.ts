@@ -3,6 +3,7 @@ import { registerUser, loginUser, logoutUser, googleLogin } from './auth.control
 import { googleLoginSchema, loginUserSchema, registerUserSchema } from './auth.schemas';
 import { validate } from '../middleware/validate.middleware';
 import { protect, AuthenticatedRequest } from '../middleware/auth.middleware';
+import { createCsrfToken, readSessionToken } from '../middleware/csrf-token.middleware';
 import { UserModel } from './user.model';
 
 const router = Router();
@@ -84,6 +85,13 @@ router.get(
     res.status(200).json({
       success: true,
       message: 'Token is valid!',
+      // Re-issued on every call (P1.1) so a client that dropped its in-memory
+      // token — page reload, or a login in another tab rotating the session —
+      // recovers with the `/me` call it already makes, with no extra endpoint
+      // and no extra round trip. Derived from the session, so it is exactly the
+      // value `csrfTokenGuard` expects. `null` for a Bearer-only caller, which
+      // the guard skips and which therefore needs no token.
+      csrfToken: createCsrfToken(readSessionToken(req)),
       user: {
         id: user._id.toString(),
         username: user.username,
