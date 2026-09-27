@@ -12,6 +12,7 @@ import {
   toggleWishlistItem as toggleWishlistItemService,
 } from './wishlist.service';
 import { recordActivity } from '../activity-log/activity-log.service';
+import type { AddToWishlistInput } from './wishlist.schemas';
 
 /** Catalog title for a resolved wishlist item, when we have it. */
 const wishlistItemName = (
@@ -88,14 +89,10 @@ const readItemId = (value: unknown): mongoose.Types.ObjectId => {
 };
 
 /** Accepts `itemId` (current) and `productId` (legacy field name). */
-const readWishlistTarget = (body: unknown) => {
-  const payload = (body ?? {}) as { itemId?: unknown; productId?: unknown; itemType?: unknown };
-
-  return {
-    itemId: readItemId(payload.itemId ?? payload.productId),
-    itemType: normalizeWishlistItemType(payload.itemType),
-  };
-};
+const readWishlistTarget = (body: AddToWishlistInput) => ({
+  itemId: readItemId(body.itemId ?? body.productId),
+  itemType: normalizeWishlistItemType(body.itemType),
+});
 
 export const getWishlist = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
@@ -108,7 +105,7 @@ export const getWishlist = async (req: AuthenticatedRequest, res: Response): Pro
 /** Idempotent add — re-saving an item keeps the price/date it was first saved at. */
 export const addToWishlist = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
-    const { itemId, itemType } = readWishlistTarget(req.body);
+    const { itemId, itemType } = readWishlistTarget(req.body as AddToWishlistInput);
     const { isWishlisted, created, target } = await addWishlistItemService(req.user.id, itemId, itemType);
 
     if (created) {
@@ -150,7 +147,7 @@ export const toggleWishlist = async (
   res: Response
 ): Promise<void> => {
   try {
-    const { itemId, itemType } = readWishlistTarget(req.body);
+    const { itemId, itemType } = readWishlistTarget(req.body as AddToWishlistInput);
     const { isWishlisted, target } = await toggleWishlistItemService(req.user.id, itemId, itemType);
 
     await logWishlistActivity(

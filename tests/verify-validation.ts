@@ -52,6 +52,7 @@ import {
 } from '../src/review/review.schemas';
 import { createAddressSchema, updateAddressSchema } from '../src/address/address.schemas';
 import { createMyAddress } from '../src/address/address.controller';
+import { addToWishlistSchema } from '../src/wishlist/wishlist.schemas';
 import type { AuthenticatedRequest } from '../src/middleware/auth.middleware';
 
 type Json = unknown;
@@ -232,6 +233,10 @@ const buildApp = (): express.Application => {
         validate({ body: createAddressSchema }),
         createMyAddress,
     );
+
+    // Wishlist schema (P0-3.6). One echo route proves the schema; the static check
+    // below proves both real POST routes carry it.
+    app.post('/wishlist/add', validate({ body: addToWishlistSchema }), echo);
 
     // Everything below passes through the global operator strip first.
     app.use(stripMongoOperators);
@@ -795,6 +800,98 @@ const checkAddressSchemas = async (url: string): Promise<void> => {
     );
 };
 
+/** The exact wire payload `wishlist.service.ts:20` sends. */
+const validWishlistAdd = {
+    itemId: '507f1f77bcf86cd799439011',
+    itemType: 'product',
+};
+
+const checkWishlistSchema = async (url: string): Promise<void> => {
+    console.log('\n=== 4d. wishlist schema (P0-3.6) ===');
+
+    const valid = await postJson(`${url}/wishlist/add`, validWishlistAdd);
+    check(
+        'wishlist: valid add payload passes unchanged',
+        valid.status === 200 && deepEqual(valid.body.body, validWishlistAdd),
+        `status=${valid.status} body=${JSON.stringify(valid.body.body)}`,
+    );
+
+    const injectedItemId = await postJson(`${url}/wishlist/add`, {
+        ...validWishlistAdd,
+        itemId: { $ne: null },
+    });
+    checkValidationEnvelope(
+        'wishlist: operator itemId is rejected by Zod (was a CastError → 500)',
+        injectedItemId,
+        VALIDATION_FAILURE_MESSAGE,
+        'body.itemId',
+    );
+
+    const derivedFields = await postJson(`${url}/wishlist/add`, {
+        ...validWishlistAdd,
+        user: '507f1f77bcf86cd799439012',
+        userId: '507f1f77bcf86cd799439012',
+        priceAtAdd: 1,
+        _id: '507f1f77bcf86cd799439013',
+    });
+    const derivedBody = JSON.stringify(derivedFields.body.body);
+    check(
+        'wishlist: user/userId/priceAtAdd/_id are stripped — price-drop baseline stays server-derived',
+        derivedFields.status === 200 &&
+        deepEqual(derivedFields.body.body, validWishlistAdd) &&
+        !derivedBody.includes('priceAtAdd'),
+        `status=${derivedFields.status} body=${derivedBody}`,
+    );
+
+    const legacyAlias = { productId: '507f1f77bcf86cd799439011', itemType: 'product' };
+    const alias = await postJson(`${url}/wishlist/add`, legacyAlias);
+    check(
+        'wishlist: legacy productId alias survives (readWishlistTarget reads it)',
+        alias.status === 200 && deepEqual(alias.body.body, legacyAlias),
+        `status=${alias.status} body=${JSON.stringify(alias.body.body)}`,
+    );
+
+    const noTarget = await postJson(`${url}/wishlist/add`, { itemType: 'product' });
+    checkValidationEnvelope(
+        'wishlist: neither itemId nor productId is rejected',
+        noTarget,
+        VALIDATION_FAILURE_MESSAGE,
+        'body.itemId',
+    );
+
+    const combo = await postJson(`${url}/wishlist/add`, { ...validWishlistAdd, itemType: 'combo' });
+    check(
+        "wishlist: itemType 'combo' is accepted",
+        combo.status === 200 && (combo.body.body as Record<string, unknown> | undefined)?.itemType === 'combo',
+        `status=${combo.status} itemType=${String((combo.body.body as Record<string, unknown> | undefined)?.itemType)}`,
+    );
+
+    const bogusType = await postJson(`${url}/wishlist/add`, {
+        ...validWishlistAdd,
+        itemType: 'bogus',
+    });
+    check(
+        "wishlist: itemType 'bogus' is rejected at the edge instead of reaching the service",
+        bogusType.status === 400 && bogusType.body.success === false,
+        `status=${bogusType.status} message=${String(bogusType.body.message)}`,
+    );
+
+    const emptyType = await postJson(`${url}/wishlist/add`, { ...validWishlistAdd, itemType: '' });
+    check(
+        "wishlist: itemType '' is still accepted (normalizeWishlistItemType maps it to 'product')",
+        emptyType.status === 200 && (emptyType.body.body as Record<string, unknown> | undefined)?.itemType === '',
+        `status=${emptyType.status} itemType=${JSON.stringify((emptyType.body.body as Record<string, unknown> | undefined)?.itemType)}`,
+    );
+
+    const withSort = { ...validWishlistAdd, sort: 'price-asc' };
+    const sorted = await postJson(`${url}/wishlist/add`, withSort);
+    check(
+        'wishlist: body sort survives — Zod must not strip a field the handlers still read',
+        sorted.status === 200 && deepEqual(sorted.body.body, withSort),
+        `status=${sorted.status} body=${JSON.stringify(sorted.body.body)}`,
+    );
+};
+
 const checkStripUnit = (): void => {
     console.log('\n=== 5. stripMongoOperatorsFrom() unit checks ===');
 
@@ -1036,6 +1133,25 @@ const ADDRESS_UPDATE_VALIDATED_ROUTE = {
     controller: 'updateMyAddress',
 };
 
+/**
+ * Both wishlist POSTs read the same target payload, so both must be validated.
+ * `DELETE /:itemId` carries no body and is deliberately excluded (see the route
+ * file comment / P0-3.5 §3.5).
+ */
+const WISHLIST_ADD_VALIDATED_ROUTE = {
+    file: 'wishlist/wishlist.routes.ts',
+    method: 'post',
+    path: '/',
+    controller: 'addToWishlist',
+};
+
+const WISHLIST_TOGGLE_VALIDATED_ROUTE = {
+    file: 'wishlist/wishlist.routes.ts',
+    method: 'post',
+    path: '/toggle',
+    controller: 'toggleWishlist',
+};
+
 /** Parses `router.<method>('path', ...handlers)` registrations without regex. */
 const parseRouterRegistrations = (
     source: string,
@@ -1151,6 +1267,16 @@ const checkValidatedRoutes = (): void => {
         subject: 'address update',
         label: 'PATCH /api/addresses/:id',
     });
+    assertValidateBeforeController({
+        ...WISHLIST_ADD_VALIDATED_ROUTE,
+        subject: 'wishlist add',
+        label: 'POST /api/wishlist',
+    });
+    assertValidateBeforeController({
+        ...WISHLIST_TOGGLE_VALIDATED_ROUTE,
+        subject: 'wishlist toggle',
+        label: 'POST /api/wishlist/toggle',
+    });
 };
 
 const main = async (): Promise<void> => {
@@ -1164,6 +1290,7 @@ const main = async (): Promise<void> => {
         await checkOrderSchema(url);
         await checkReviewSchema(url);
         await checkAddressSchemas(url);
+        await checkWishlistSchema(url);
     } finally {
         await new Promise<void>((resolve) => {
             server.close(() => resolve());
