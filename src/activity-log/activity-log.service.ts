@@ -341,15 +341,15 @@ const resolveActorSnapshot = async (
 };
 
 const readIpAddress = (req: Request): string | undefined => {
-    const forwarded = req.headers['x-forwarded-for'];
-
-    if (typeof forwarded === 'string' && forwarded.trim() !== '') {
-        const first = forwarded.split(',')[0]?.trim();
-        if (first) {
-            return first.slice(0, 100);
-        }
-    }
-
+    // `req.ip` and nothing else.
+    //
+    // This used to read the first entry of the `X-Forwarded-For` header directly,
+    // which records whatever the caller chose to send — any client could write an
+    // arbitrary address into the audit trail, and with `trust proxy` configured
+    // it was also redundant. Express derives `req.ip` from that header under the
+    // configured hop count (see `config/trust-proxy.ts`), so it is both the
+    // correct client address and the one the rate limiters bucket by: the log and
+    // the limiter now agree on who the caller was.
     const ip = typeof req.ip === 'string' ? req.ip : '';
     return ip ? ip.slice(0, 100) : undefined;
 };

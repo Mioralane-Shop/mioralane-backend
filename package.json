@@ -13,6 +13,7 @@
     "verify:route-guards": "tsx tests/verify-admin-route-guards.ts",
     "verify:validation": "tsx tests/verify-validation.ts",
     "verify:error-handler": "tsx tests/verify-error-handler.ts",
+    "verify:security-headers": "tsx tests/verify-security-headers.ts",
     "seed:combos": "tsx src/scripts/seed-combos.ts",
     "migrate:wishlist": "tsx src/scripts/migrate-user-wishlist.ts",
     "migrate:wishlist-items": "tsx src/scripts/migrate-wishlist-items.ts"
@@ -36,6 +37,7 @@
     "express": "^5.2.1",
     "express-rate-limit": "^8.6.2",
     "google-auth-library": "^11.0.0",
+    "helmet": "^8.3.0",
     "joi": "^17.13.3",
     "jsonwebtoken": "^9.0.3",
     "mongoose": "^9.9.1",
