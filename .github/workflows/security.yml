@@ -36,16 +36,22 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # Pinned to an exact release, not a floating major. Nothing in the repo
-      # pinned Node before this (no `engines`, no `.nvmrc`, no `packageManager`),
-      # and local development runs v24.9.0 — so this is the first and only pin.
-      # 20.20.2 is verified against nodejs.org/dist/index.json as the latest
-      # published 20.x, and it clears the highest requirement in the monorepo:
-      # the admin app's Next 16 needs >= 20.9.
+      # Node 20 — the LTS line. Nothing in the repo pinned Node before this (no
+      # `engines`, no `.nvmrc`, no `packageManager`), while local development runs
+      # v24.9.0, so a version skew exists by design.
+      #
+      # The major line rather than an exact patch: `'20'` resolves to the newest
+      # published 20.x on the runner, so CI keeps running and still picks up 20.x
+      # security releases. The cost is that the toolchain is no longer pinned
+      # byte-for-byte — an exact version can be substituted here if that guarantee
+      # is wanted and the runner can resolve it.
+      #
+      # 20 clears the highest requirement in the monorepo: the admin app is on
+      # Next 16, which needs >= 20.9.
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: '20.20.2'
+          node-version: '20'
           cache: npm
 
       - name: Install dependencies
