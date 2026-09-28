@@ -49,7 +49,7 @@ export const optionalNumericField = (
 export const OBJECT_ID_PATTERN = /^[0-9a-fA-F]{24}$/;
 
 /** Exact wording returned when {@link safeUrlSchema} rejects a value. */
-export const SAFE_URL_MESSAGE = 'URL must start with https:// or /';
+export const SAFE_URL_MESSAGE = 'URL must be an https:// URL or a site-relative path';
 
 /**
  * A site-relative path, and only a site-relative path.
