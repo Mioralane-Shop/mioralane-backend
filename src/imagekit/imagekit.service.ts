@@ -1,9 +1,11 @@
-import crypto from 'crypto';
-import path from 'path';
 import ImageKit, { toFile } from '@imagekit/nodejs';
 import type { MediaAssetType, MediaUploadResponseData } from '../media/media.types';
-
-export type SupportedImageMimeType = 'image/jpeg' | 'image/png' | 'image/webp' | 'image/gif';
+import {
+  MAX_MEDIA_UPLOAD_SIZE_BYTES,
+  MEDIA_IMAGE_MIME_ALLOWLIST,
+  buildImageFileName,
+  type SupportedImageMimeType,
+} from '../media/image-upload-policy';
 
 export interface UploadedImageFile {
   buffer: Buffer;
@@ -34,36 +36,31 @@ const MEDIA_FILENAME_PREFIX_BY_TYPE: Record<MediaAssetType, string> = {
   // Review images are temporarily disabled.
   // review: 'mioralane-review',
 };
-const MIME_TO_EXTENSION: Record<SupportedImageMimeType, string> = {
-  'image/jpeg': '.jpg',
-  'image/png': '.png',
-  'image/webp': '.webp',
-  'image/gif': '.gif',
-};
 
-const MIME_TYPE_TO_EXTENSION: Record<string, string> = {
-  'image/jpeg': '.jpg',
-  'image/jpg': '.jpg',
-  'image/png': '.png',
-  'image/webp': '.webp',
-  'image/gif': '.gif',
-  'image/avif': '.avif',
-  'image/svg+xml': '.svg',
-  'image/heic': '.heic',
-  'image/heif': '.heif',
-};
+/**
+ * ImageKit-side upload checks — a second, independent layer (P1.2, decision ⑦).
+ *
+ * ImageKit is a store, not a validator: its API accepts `non-image` files, so
+ * this asks it to refuse anything outside the same allowlist the local guard
+ * uses, and anything above the media ceiling. The string is **generated** from
+ * `MEDIA_IMAGE_MIME_ALLOWLIST` / `MAX_MEDIA_UPLOAD_SIZE_BYTES` rather than typed
+ * out, because a duplicated allowlist is a list that eventually disagrees with
+ * itself — the same reason the CORS and CSRF header lists are single-sourced.
+ *
+ * Two things to be clear about:
+ *  - This can never be the primary control. It only runs once the bytes have
+ *    already been sent to a third party, and it is unavailable in tests.
+ *  - The ceiling here is the shared media ceiling (8MB). The dev-only test route
+ *    enforces its own tighter 5MB locally in `imagekit.module.ts`; this bound is
+ *    the wider one on purpose, so it cannot reject a legitimate media upload.
+ *
+ * If this syntax were ever rejected by the API, every upload would fail with a
+ * 400 and `'ImageKit upload failed'` in the log, so it is one line to drop.
+ */
+const buildUploadChecks = (): string => {
+  const mimeList = MEDIA_IMAGE_MIME_ALLOWLIST.map((mime) => `'${mime}'`).join(', ');
 
-const sanitizeBaseName = (value: string): string => {
-  const normalized = value
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9.-]+/g, '-')
-    .replace(/-+/g, '-')
-    .replace(/^\.+/, '')
-    .replace(/^-+/, '')
-    .replace(/-+$/, '');
-
-  return normalized || 'image';
+  return `'file.mime' IN [${mimeList}] AND 'file.size' <= ${MAX_MEDIA_UPLOAD_SIZE_BYTES}`;
 };
 
 export class ImageKitService {
@@ -91,64 +88,16 @@ export class ImageKitService {
     });
   }
 
-  detectImageMimeType(buffer: Buffer): SupportedImageMimeType | null {
-    if (buffer.length >= 8) {
-      const pngSignature = buffer.subarray(0, 8);
-      if (
-        pngSignature[0] === 0x89 &&
-        pngSignature[1] === 0x50 &&
-        pngSignature[2] === 0x4e &&
-        pngSignature[3] === 0x47 &&
-        pngSignature[4] === 0x0d &&
-        pngSignature[5] === 0x0a &&
-        pngSignature[6] === 0x1a &&
-        pngSignature[7] === 0x0a
-      ) {
-        return 'image/png';
-      }
-    }
-
-    if (buffer.length >= 3 && buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff) {
-      return 'image/jpeg';
-    }
-
-    if (buffer.length >= 12) {
-      const riff = buffer.toString('ascii', 0, 4);
-      const webp = buffer.toString('ascii', 8, 12);
-      if (riff === 'RIFF' && webp === 'WEBP') {
-        return 'image/webp';
-      }
-    }
-
-    if (buffer.length >= 6) {
-      const header = buffer.toString('ascii', 0, 6);
-      if (header === 'GIF87a' || header === 'GIF89a') {
-        return 'image/gif';
-      }
-    }
-
-    return null;
-  }
-
   buildTestFileName(originalname: string, mimeType: SupportedImageMimeType): string {
-    return this.buildFileName(DEFAULT_FILENAME_PREFIX, originalname, mimeType);
+    return buildImageFileName(DEFAULT_FILENAME_PREFIX, originalname, mimeType);
   }
 
   buildMediaFileName(assetType: MediaAssetType, originalname: string, mimeType: SupportedImageMimeType): string {
-    return this.buildFileName(MEDIA_FILENAME_PREFIX_BY_TYPE[assetType], originalname, mimeType);
+    return buildImageFileName(MEDIA_FILENAME_PREFIX_BY_TYPE[assetType], originalname, mimeType);
   }
 
   buildMediaFolder(assetType: MediaAssetType): string {
     return MEDIA_FOLDER_BY_TYPE[assetType];
-  }
-
-  private buildFileName(prefix: string, originalname: string, mimeType: SupportedImageMimeType): string {
-    const parsedName = path.parse(originalname).name;
-    const safeBaseName = sanitizeBaseName(parsedName);
-    const extension = MIME_TO_EXTENSION[mimeType] ?? '.img';
-    const uniqueSuffix = `${Date.now()}-${crypto.randomUUID()}`;
-
-    return `${prefix}-${safeBaseName}-${uniqueSuffix}${extension}`;
   }
 
   private mapUploadResponse(
@@ -178,7 +127,7 @@ export class ImageKitService {
     fileNamePrefix: string,
     folder: string
   ): Promise<MediaUploadResponseData> {
-    const fileName = this.buildFileName(fileNamePrefix, file.originalname, detectedMimeType);
+    const fileName = buildImageFileName(fileNamePrefix, file.originalname, detectedMimeType);
     const uploadable = await toFile(file.buffer, fileName, {
       type: detectedMimeType,
     });
@@ -188,6 +137,7 @@ export class ImageKitService {
       fileName,
       folder,
       useUniqueFileName: false,
+      checks: buildUploadChecks(),
     });
 
     return this.mapUploadResponse(uploaded, assetType, detectedMimeType);
@@ -207,6 +157,7 @@ export class ImageKitService {
       fileName,
       folder: TEST_FOLDER,
       useUniqueFileName: false,
+      checks: buildUploadChecks(),
     });
   }
 

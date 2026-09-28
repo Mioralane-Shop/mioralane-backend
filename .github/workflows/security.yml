@@ -85,5 +85,11 @@ jobs:
       - name: Verify CSRF token guard
         run: npm run verify:csrf
 
+      # P1.2. Drives the real multer factory and the real content guard over real
+      # multipart requests: the allowlist (GIF now refused), the name policy, the
+      # 8MB ceiling, and the wiring that puts the guard on both upload routes.
+      - name: Verify file upload validation
+        run: npm run verify:file-upload
+
       - name: Verify admin route guards
         run: npm run verify:route-guards
