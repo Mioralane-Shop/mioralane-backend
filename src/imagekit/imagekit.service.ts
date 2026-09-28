@@ -1,11 +1,6 @@
 import ImageKit, { toFile } from '@imagekit/nodejs';
 import type { MediaAssetType, MediaUploadResponseData } from '../media/media.types';
-import {
-  MAX_MEDIA_UPLOAD_SIZE_BYTES,
-  MEDIA_IMAGE_MIME_ALLOWLIST,
-  buildImageFileName,
-  type SupportedImageMimeType,
-} from '../media/image-upload-policy';
+import { buildImageFileName, type SupportedImageMimeType } from '../media/image-upload-policy';
 
 export interface UploadedImageFile {
   buffer: Buffer;
@@ -38,30 +33,23 @@ const MEDIA_FILENAME_PREFIX_BY_TYPE: Record<MediaAssetType, string> = {
 };
 
 /**
- * ImageKit-side upload checks — a second, independent layer (P1.2, decision ⑦).
+ * The ImageKit `checks` clause was removed here in P1.2a.
  *
- * ImageKit is a store, not a validator: its API accepts `non-image` files, so
- * this asks it to refuse anything outside the same allowlist the local guard
- * uses, and anything above the media ceiling. The string is **generated** from
+ * P1.2 sent `checks: "'file.mime' IN [...] AND 'file.size' <= 8388608"` as a
+ * provider-side second layer. The syntax matched ImageKit's documentation but was
+ * never exercised against the live API, and the failure mode was severe: an
+ * invalid clause makes ImageKit reject the upload, so **every** upload would
+ * answer 400 `'ImageKit upload failed'`.
+ *
+ * The local guard (`middleware/upload-validator.middleware.ts`) is the tested
+ * control — 65 harness checks plus negative controls, no network, no credentials
+ * — so the unverified layer was not worth that blast radius.
+ *
+ * Re-adding it is tracked as a P1.6 chore: smoke-test the clause in dev with real
+ * credentials first, then reintroduce it generated from
  * `MEDIA_IMAGE_MIME_ALLOWLIST` / `MAX_MEDIA_UPLOAD_SIZE_BYTES` rather than typed
- * out, because a duplicated allowlist is a list that eventually disagrees with
- * itself — the same reason the CORS and CSRF header lists are single-sourced.
- *
- * Two things to be clear about:
- *  - This can never be the primary control. It only runs once the bytes have
- *    already been sent to a third party, and it is unavailable in tests.
- *  - The ceiling here is the shared media ceiling (8MB). The dev-only test route
- *    enforces its own tighter 5MB locally in `imagekit.module.ts`; this bound is
- *    the wider one on purpose, so it cannot reject a legitimate media upload.
- *
- * If this syntax were ever rejected by the API, every upload would fail with a
- * 400 and `'ImageKit upload failed'` in the log, so it is one line to drop.
+ * out. Git history (commit before P1.2a) has the exact string.
  */
-const buildUploadChecks = (): string => {
-  const mimeList = MEDIA_IMAGE_MIME_ALLOWLIST.map((mime) => `'${mime}'`).join(', ');
-
-  return `'file.mime' IN [${mimeList}] AND 'file.size' <= ${MAX_MEDIA_UPLOAD_SIZE_BYTES}`;
-};
 
 export class ImageKitService {
   private readonly client: ImageKit;
@@ -137,7 +125,6 @@ export class ImageKitService {
       fileName,
       folder,
       useUniqueFileName: false,
-      checks: buildUploadChecks(),
     });
 
     return this.mapUploadResponse(uploaded, assetType, detectedMimeType);
@@ -157,7 +144,6 @@ export class ImageKitService {
       fileName,
       folder: TEST_FOLDER,
       useUniqueFileName: false,
-      checks: buildUploadChecks(),
     });
   }
 

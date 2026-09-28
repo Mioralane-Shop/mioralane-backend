@@ -834,11 +834,9 @@ const main = async (): Promise<void> => {
         'the limit is declared in more than one place'
     );
     check(
-        'the provider-side checks are generated from the shared allowlist and ceiling',
-        (imagekitService.match(/checks: buildUploadChecks\(\)/g) ?? []).length === 2 &&
-            /buildUploadChecks[\s\S]*MEDIA_IMAGE_MIME_ALLOWLIST/.test(imagekitService) &&
-            /buildUploadChecks[\s\S]*MAX_MEDIA_UPLOAD_SIZE_BYTES/.test(imagekitService),
-        'the ImageKit checks string is hard-coded or missing'
+        'the unverified ImageKit checks clause is absent by decision (P1.2a)',
+        !/checks\s*:/.test(imagekitService) && !/buildUploadChecks/.test(imagekitService),
+        'an ImageKit checks clause is present — its syntax is unverified against the live API and its failure mode is every upload 400ing'
     );
     check(
         'no secret or credential is embedded alongside the upload policy',
