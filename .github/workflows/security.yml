@@ -100,3 +100,9 @@ jobs:
 
       - name: Verify admin route guards
         run: npm run verify:route-guards
+
+      # P1.4 Block A. The stored-URL allowlist (safeUrlSchema), the seven fields
+      # that carry an `href` value, and the twins that prove the refinement is what
+      # refuses a javascript: URL rather than something incidental.
+      - name: Verify URL safety
+        run: npm run verify:url-safety

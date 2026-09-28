@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { OBJECT_ID_PATTERN } from '../utils/validation';
+import { OBJECT_ID_PATTERN, safeUrlSchema } from '../utils/validation';
 
 /**
  * Request-body schemas for the four admin promotion mutations.
@@ -93,7 +93,7 @@ const campaignFields = {
             posterAlt: z.string().trim().optional(),
             actionType: z.enum(POPUP_ACTION_TYPES).optional(),
             ctaLabel: z.string().trim().optional(),
-            ctaUrl: z.string().trim().optional(),
+            ctaUrl: safeUrlSchema().optional(),
             couponId: objectIdField.optional(),
         })
         .optional(),
