@@ -58,6 +58,11 @@ const orderShippingAddressSchema = z.object({
  *
  * `couponCode` and `quoteFingerprint` MUST stay: the controller reads both, and
  * `quoteFingerprint` feeds a mismatch check that rejects the order.
+ *
+ * `idempotencyKey` is the client's retry token (P1.3, R1). Optional so an older
+ * client keeps working; honoured when present, and the clients send it from the
+ * same release. Validated as a UUID because it is a generated token, not a
+ * user-facing value — anything else is a bug on the caller's side.
  */
 export const createOrderSchema = z.object({
     items: z.array(orderItemSchema),
@@ -66,6 +71,7 @@ export const createOrderSchema = z.object({
     paymentMethod: z.enum(['cash_on_delivery']).optional(),
     couponCode: z.string().optional(),
     quoteFingerprint: z.string().optional(),
+    idempotencyKey: z.string().uuid().optional(),
 });
 
 export type CreateOrderInput = z.infer<typeof createOrderSchema>;

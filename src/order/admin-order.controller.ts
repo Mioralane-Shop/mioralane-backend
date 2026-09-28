@@ -12,6 +12,7 @@ import {
   recordCancellationRestorations,
 } from '../inventory/inventory-transaction.service';
 import { recordActivity } from '../activity-log/activity-log.service';
+import { canTransitionOrderStatus } from './order-status-transitions';
 
 type AdminOrderUser = {
   id: string;
@@ -152,11 +153,12 @@ const ALLOWED_ORDER_STATUSES = Object.values(OrderStatus);
 
 const escapeRegex = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
-type HttpError = Error & { statusCode?: number };
+type HttpError = Error & { statusCode?: number; code?: string };
 
-const createHttpError = (statusCode: number, message: string): HttpError => {
+const createHttpError = (statusCode: number, message: string, code?: string): HttpError => {
   const error = new Error(message) as HttpError;
   error.statusCode = statusCode;
+  error.code = code;
   return error;
 };
 
@@ -560,8 +562,26 @@ export const updateAdminOrderStatus = async (
         );
       }
 
+      // NOTE (P1.3, R7): two *concurrent* cancels are prevented by MongoDB's
+      // write conflict on the order document below rather than by an explicit
+      // predicate here — there is no atomic "cancel once" guard in this code. The
+      // sequential case is fully guarded (the CANCELLED block above, plus the
+      // same-status no-op below), and the ledger's unique index rejects a second
+      // restoration row. Recording it because the safety here is a property of
+      // the transaction, not of the code.
       if (currentStatus === nextStatus) {
         return order.toObject() as RawOrderRecord;
+      }
+
+      // P1.3 (R4): the value being a valid status was never enough — the
+      // transition has to be a legal progression. Without this, DELIVERED ->
+      // CANCELLED was accepted and restored stock for delivered goods.
+      if (!canTransitionOrderStatus(currentStatus, nextStatus)) {
+        throw createHttpError(
+          400,
+          `Order status cannot change from ${currentStatus} to ${nextStatus}`,
+          'INVALID_STATUS_TRANSITION'
+        );
       }
 
       if (nextStatus === OrderStatus.SHIPPED && order.containsPreOrder) {
@@ -699,6 +719,7 @@ export const updateAdminOrderStatus = async (
       res.status(httpError.statusCode).json({
         success: false,
         message: httpError.message,
+        code: httpError.code,
       });
       return;
     }

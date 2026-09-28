@@ -2,6 +2,7 @@ import mongoose from 'mongoose';
 import { Order } from '../order/order.model';
 import { Coupon, ICouponDocument, normalizeCouponCode } from './coupon.model';
 import { CouponUsage } from './coupon-usage.model';
+import { CouponUsageCounter } from './coupon-usage-counter.model';
 import {
   CampaignType,
   getRuntimeCampaignStatus,
@@ -316,5 +317,61 @@ export const reserveCouponUsage = async (
 
   if (!updated) {
     throw createPromotionError(400, 'Coupon usage limit has been reached', 'usage_exceeded');
+  }
+};
+
+/**
+ * Per-customer reservation (P1.3, R3) — the atomic counterpart of the
+ * `countDocuments` pre-check in {@link validateCouponForOrder}.
+ *
+ * Reads the coupon's own `perCustomerUsageLimit` inside the transaction rather
+ * than taking it from the caller, so it cannot be passed a stale or widened
+ * limit. No-ops when the coupon has no per-customer limit, which is the common
+ * case.
+ *
+ * The upsert-then-increment pair is deliberate: the increment's `$expr` guard
+ * needs the document to exist, and MongoDB cannot construct an upserted document
+ * from a `$expr` filter. Both writes are inside the caller's transaction, and the
+ * increment itself is a single atomic operation.
+ *
+ * Failure mode under concurrency is fail-closed: the losing transaction raises a
+ * duplicate key on the counter's unique index and the order is not created.
+ */
+export const reserveCouponUsageForCustomer = async (
+  couponId: mongoose.Types.ObjectId | string,
+  userId: string,
+  session: mongoose.ClientSession
+): Promise<void> => {
+  const coupon = await Coupon.findById(couponId)
+    .session(session)
+    .select('perCustomerUsageLimit')
+    .exec();
+
+  const perCustomerLimit = coupon?.perCustomerUsageLimit;
+
+  if (!perCustomerLimit) {
+    return;
+  }
+
+  const userObjectId = new mongoose.Types.ObjectId(userId);
+
+  await CouponUsageCounter.updateOne(
+    { couponId, userId: userObjectId },
+    { $setOnInsert: { count: 0 } },
+    { upsert: true, session }
+  ).exec();
+
+  const reserved = await CouponUsageCounter.findOneAndUpdate(
+    { couponId, userId: userObjectId, $expr: { $lt: ['$count', perCustomerLimit] } },
+    { $inc: { count: 1 } },
+    { new: true, session }
+  ).exec();
+
+  if (!reserved) {
+    throw createPromotionError(
+      400,
+      'Coupon usage limit has been reached for this customer',
+      'customer_usage_exceeded'
+    );
   }
 };

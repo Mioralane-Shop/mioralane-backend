@@ -91,5 +91,12 @@ jobs:
       - name: Verify file upload validation
         run: npm run verify:file-upload
 
+      # P1.3. The pure decisions (zone resolution, status transitions), the
+      # idempotency fingerprint, and the wiring/atomicity shape of everything that
+      # needs a database. The concurrent cases that need a replica set are the
+      # opt-in integration layer, not this step.
+      - name: Verify order tampering fixes
+        run: npm run verify:order-tampering
+
       - name: Verify admin route guards
         run: npm run verify:route-guards

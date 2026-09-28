@@ -23,7 +23,6 @@ export type ShippingAddressInput = {
   detailedAddress?: string;
   fullAddress?: string;
   landmark?: string;
-  deliveryZone?: DeliveryZone;
 };
 
 export type NormalizedShippingAddress = {

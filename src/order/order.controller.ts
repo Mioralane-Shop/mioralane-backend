@@ -3,7 +3,7 @@ import mongoose from 'mongoose';
 import { Response } from 'express';
 import { Product } from '../product/product.model';
 import { Combo } from '../combo/combo.model';
-import { Order, OrderItemType } from './order.model';
+import { Order, IOrderDocument, OrderItemType } from './order.model';
 import { AuthenticatedRequest } from '../middleware/auth.middleware';
 import { sanitizeErrorMessage } from '../middleware/error.middleware';
 import { OrderStatus } from '../enums/order-status.enum';
@@ -12,6 +12,7 @@ import {
   calculateAutomaticPromotion,
   DiscountableOrderItem,
   reserveCouponUsage,
+  reserveCouponUsageForCustomer,
   selectBetterSinglePromotion,
   validateCouponForOrder,
 } from '../promotion/promotion.service';
@@ -22,14 +23,59 @@ import {
 } from '../shipping/shipping.service';
 import { resolveSavedAddressForCheckout } from '../address/address.service';
 import { recordOrderStockDeductions } from '../inventory/inventory-transaction.service';
+// NOTE (P1.3, R8): stock is deducted here with this module's own guarded `$inc`
+// rather than through the inventory module's `applyStockDelta`, and the ledger
+// row is then written via the module in the same transaction. Both guards are
+// equivalent today, but two implementations of one invariant is the drift shape
+// G6 removed from the upload path — worth collapsing when this path is next
+// touched.
+import {
+  IDEMPOTENCY_KEY_TTL_MS,
+  IdempotencyKey,
+  createCheckoutRequestFingerprint,
+} from './idempotency-key.model';
 import { pickActivitySnapshot, recordActivity } from '../activity-log/activity-log.service';
 import type { CreateOrderInput } from './order.schemas';
+import { MAX_ORDER_ITEM_QUANTITY } from './order.schemas';
 
 /** Fields kept in the participant order snapshot. */
 const ORDER_AUDIT_FIELDS = ['orderNumber', 'orderStatus', 'totalAmount', 'paymentMethod'];
 
 type HttpError = Error & { statusCode?: number; code?: string; quote?: unknown };
 
+/**
+ * The product/combo fields checkout reads, as one shape (P1.3, R5).
+ *
+ * Loading a combo and a product into a single variable produced a union
+ * TypeScript cannot index, which is why this path previously reached for
+ * `as any` on `availabilityMode`/`preOrder` — exactly the pre-order capacity
+ * logic, where a field rename would otherwise go unnoticed by the compiler.
+ * Building the view explicitly removes both casts without one of its own.
+ */
+type ResolvedPreOrder = {
+  expectedArrivalDate?: Date;
+  quantityLimit?: number;
+  customerMessage?: string;
+  status?: string;
+  reservedQuantity?: number;
+};
+
+type ResolvedSourceDoc = {
+  _id: mongoose.Types.ObjectId;
+  title?: string;
+  price: number;
+  salePrice?: number;
+  images?: string[];
+  stock: number;
+  category?: string;
+  availabilityMode?: string;
+  preOrder?: ResolvedPreOrder;
+};
+
+// NOTE (P1.3, R8): the 3-byte random token makes a collision roughly 1 in 16.7M
+// per day. If one ever happened, the unique index would raise a duplicate-key
+// error, which this controller does not translate — it would surface as a 500.
+// Acceptable at this scale; if the volume grows, retry the insert on 11000.
 const generateOrderNumber = (): string => {
   const stamp = new Date().toISOString().slice(0, 10).replace(/-/g, '');
   const token = crypto.randomBytes(3).toString('hex').toUpperCase();
@@ -43,6 +89,13 @@ const createHttpError = (statusCode: number, message: string, code?: string, quo
   error.quote = quote;
   return error;
 };
+
+/** MongoDB's duplicate-key error, as raised by a unique index. */
+const isDuplicateKeyError = (error: unknown): boolean =>
+  typeof error === 'object' && error !== null && (error as { code?: unknown }).code === 11000;
+
+/** The response body every successful checkout returns, replay or first attempt. */
+const CREATED_ORDER_MESSAGE = 'Order placed successfully';
 
 export const createOrder = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   const body = req.body as CreateOrderInput | undefined;
@@ -91,9 +144,15 @@ export const createOrder = async (req: AuthenticatedRequest, res: Response): Pro
   try {
     normalizedShippingAddress = validateAndNormalizeShippingAddress(shippingAddressInput);
   } catch (error) {
+    // `code` added in P1.3 (R2): the zone resolver now refuses an unknown
+    // district/area, and the client needs the machine-readable reason to point at
+    // the right field. Error shape only — success responses are unchanged.
+    const addressError = error as HttpError;
+
     res.status(400).json({
       success: false,
       message: sanitizeErrorMessage(error, 'Invalid shipping address'),
+      code: addressError.code ?? 'invalid_shipping_address',
     });
     return;
   }
@@ -114,8 +173,55 @@ export const createOrder = async (req: AuthenticatedRequest, res: Response): Pro
     return;
   }
 
+  // R6: the schema already caps this. Re-applied here so an internal caller that
+  // bypasses `validate()` cannot exceed it either — unreachable from the route,
+  // and a refusal rather than a silent pass if that ever changes.
+  if (normalizedItems.some((item) => item.quantity > MAX_ORDER_ITEM_QUANTITY)) {
+    res.status(400).json({
+      success: false,
+      message: `An order item quantity cannot exceed ${MAX_ORDER_ITEM_QUANTITY}`,
+    });
+    return;
+  }
+
+  // ── Idempotency (P1.3, R1) ────────────────────────────────────────────
+  // Checked before any write, so a replay costs one read and creates nothing.
+  const idempotencyKey =
+    typeof body?.idempotencyKey === 'string' ? body.idempotencyKey.trim() : '';
+  const requestFingerprint = createCheckoutRequestFingerprint(body ?? { items: [] }, userId);
+
+  if (idempotencyKey) {
+    const existingKey = await IdempotencyKey.findOne({ userId, key: idempotencyKey }).exec();
+
+    if (existingKey) {
+      if (existingKey.requestFingerprint !== requestFingerprint) {
+        res.status(409).json({
+          success: false,
+          message: 'This checkout key was already used for a different order.',
+          code: 'IDEMPOTENCY_KEY_REUSED',
+        });
+        return;
+      }
+
+      const existingOrder = await Order.findById(existingKey.orderId).exec();
+
+      if (existingOrder) {
+        res.status(200).json({
+          success: true,
+          message: CREATED_ORDER_MESSAGE,
+          order: existingOrder,
+        });
+        return;
+      }
+
+      // Key present, order gone (should be impossible: both are written in one
+      // transaction). Fall through and place the order rather than fail closed on
+      // a customer who did nothing wrong.
+    }
+  }
+
   const session = await mongoose.startSession();
-  let createdOrder: any = null;
+  let createdOrder: IOrderDocument | null = null;
 
   try {
     createdOrder = await session.withTransaction(async () => {
@@ -145,16 +251,43 @@ export const createOrder = async (req: AuthenticatedRequest, res: Response): Pro
           );
         }
 
-        const sourceDoc =
+        const comboDoc =
           item.itemType === 'combo'
             ? await Combo.findById(item.itemId)
               .session(session)
               .select('_id title price images stock category')
               .exec()
-            : await Product.findById(item.itemId)
+            : null;
+        const fetchedProductDoc =
+          item.itemType === 'product'
+            ? await Product.findById(item.itemId)
               .session(session)
               .select('_id title price salePrice images stock category availabilityMode preOrder')
-              .exec();
+              .exec()
+            : null;
+
+        const sourceDoc: ResolvedSourceDoc | null = fetchedProductDoc
+          ? {
+            _id: fetchedProductDoc._id,
+            title: fetchedProductDoc.title,
+            price: fetchedProductDoc.price,
+            salePrice: fetchedProductDoc.salePrice,
+            images: fetchedProductDoc.images,
+            stock: fetchedProductDoc.stock,
+            category: fetchedProductDoc.category,
+            availabilityMode: fetchedProductDoc.availabilityMode,
+            preOrder: fetchedProductDoc.preOrder,
+          }
+          : comboDoc
+            ? {
+              _id: comboDoc._id,
+              title: comboDoc.title,
+              price: comboDoc.price,
+              images: comboDoc.images,
+              stock: comboDoc.stock,
+              category: comboDoc.category,
+            }
+            : null;
 
         if (!sourceDoc) {
           throw createHttpError(
@@ -164,8 +297,11 @@ export const createOrder = async (req: AuthenticatedRequest, res: Response): Pro
         }
 
         const isPreOrderProduct =
-          item.itemType === 'product' && (sourceDoc as any).availabilityMode === 'pre_order';
-        const preOrder = isPreOrderProduct ? (sourceDoc as any).preOrder : undefined;
+          item.itemType === 'product' && sourceDoc.availabilityMode === 'pre_order';
+        // `?? {}` rather than `undefined`: a pre-order product with no pre-order
+        // configuration must still fail closed as PRE_ORDER_CLOSED, which is what
+        // the optional-chain form did before this was typed.
+        const preOrder: ResolvedPreOrder = isPreOrderProduct ? sourceDoc.preOrder ?? {} : {};
         const preOrderLimit = Number(preOrder?.quantityLimit ?? 0);
         const preOrderReserved = Number(preOrder?.reservedQuantity ?? 0);
         const preOrderRemaining = Math.max(preOrderLimit - preOrderReserved, 0);
@@ -193,11 +329,10 @@ export const createOrder = async (req: AuthenticatedRequest, res: Response): Pro
           );
         }
 
-        const productDoc = sourceDoc as { salePrice?: number; price: number; category?: string };
         const sellingPrice =
-          item.itemType === 'product' && productDoc.salePrice != null
-            ? productDoc.salePrice
-            : productDoc.price;
+          item.itemType === 'product' && sourceDoc.salePrice != null
+            ? sourceDoc.salePrice
+            : sourceDoc.price;
 
         resolvedItems.push({
           itemType: item.itemType,
@@ -207,8 +342,8 @@ export const createOrder = async (req: AuthenticatedRequest, res: Response): Pro
           price: sellingPrice,
           thumbnail: sourceDoc.images?.[0] ?? '',
           quantity: item.quantity,
-          originalPrice: productDoc.price,
-          category: productDoc.category,
+          originalPrice: sourceDoc.price,
+          category: sourceDoc.category,
           fulfillmentType: isPreOrderProduct ? 'pre_order' : 'regular',
           preOrderSnapshot: isPreOrderProduct
             ? {
@@ -367,6 +502,15 @@ export const createOrder = async (req: AuthenticatedRequest, res: Response): Pro
       const containsPreOrder = preOrderDates.length > 0;
       const expectedReadinessDate = containsPreOrder ? new Date(Math.max(...preOrderDates)) : undefined;
 
+      // Coupon counters are reserved BEFORE the order row exists (P1.3). The
+      // global counter already worked this way; the per-customer counter (R3) now
+      // does too, so neither limit depends on a read that a concurrent checkout
+      // could have taken before the other committed.
+      if (selectedPromotion.coupon) {
+        await reserveCouponUsage({ _id: selectedPromotion.coupon.couponId }, session);
+        await reserveCouponUsageForCustomer(selectedPromotion.coupon.couponId, userId, session);
+      }
+
       const [order] = await Order.create(
         [
           {
@@ -420,6 +564,24 @@ export const createOrder = async (req: AuthenticatedRequest, res: Response): Pro
         { session }
       );
 
+      // Idempotency record (P1.3, R1), written in the same transaction as the
+      // order: a rolled-back checkout leaves no key behind, so the customer's
+      // retry is free to succeed rather than being answered with a stale replay.
+      if (idempotencyKey) {
+        await IdempotencyKey.create(
+          [
+            {
+              userId: new mongoose.Types.ObjectId(userId),
+              key: idempotencyKey,
+              requestFingerprint,
+              orderId: order._id,
+              expiresAt: new Date(Date.now() + IDEMPOTENCY_KEY_TTL_MS),
+            },
+          ],
+          { session }
+        );
+      }
+
       await recordOrderStockDeductions(
         order._id.toString(),
         userId,
@@ -428,7 +590,6 @@ export const createOrder = async (req: AuthenticatedRequest, res: Response): Pro
       );
 
       if (selectedPromotion.coupon) {
-        await reserveCouponUsage({ _id: selectedPromotion.coupon.couponId }, session);
         await CouponUsage.create(
           [
             {
@@ -460,7 +621,7 @@ export const createOrder = async (req: AuthenticatedRequest, res: Response): Pro
 
     res.status(201).json({
       success: true,
-      message: 'Order placed successfully',
+      message: CREATED_ORDER_MESSAGE,
       order: createdOrder,
     });
   } catch (error) {
@@ -472,6 +633,31 @@ export const createOrder = async (req: AuthenticatedRequest, res: Response): Pro
       );
 
     console.error('[createOrder]', error);
+
+    // A concurrent request carrying the same key lost the race on the unique
+    // index. Re-read it: when the winner committed this is an ordinary replay,
+    // and when it did not the caller should simply try again.
+    if (idempotencyKey && isDuplicateKeyError(error)) {
+      const racedKey = await IdempotencyKey.findOne({ userId, key: idempotencyKey }).exec();
+      const racedOrder = racedKey ? await Order.findById(racedKey.orderId).exec() : null;
+
+      if (racedKey && racedOrder && racedKey.requestFingerprint === requestFingerprint) {
+        res.status(200).json({
+          success: true,
+          message: CREATED_ORDER_MESSAGE,
+          order: racedOrder,
+        });
+        return;
+      }
+
+      res.status(409).json({
+        success: false,
+        message: 'This checkout is already being processed. Please wait a moment and try again.',
+        code: 'IDEMPOTENCY_KEY_IN_PROGRESS',
+      });
+      return;
+    }
+
     if (transactionUnsupported) {
       res.status(503).json({
         success: false,
