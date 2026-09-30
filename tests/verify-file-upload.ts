@@ -255,10 +255,21 @@ type UploadOptions = {
     declaredType: string;
     field?: string;
     omitFile?: boolean;
+    /**
+     * Extra non-file parts, appended before the file. Needed to exercise the
+     * parser's *field-name* limits: `fieldNestingDepth` and `fieldArrayIndexLimit`
+     * are checked while parsing a text part, so sending the crafted name as the
+     * file's field name only ever hits `.single()`'s LIMIT_UNEXPECTED_FILE.
+     */
+    extraFields?: { name: string; value: string }[];
 };
 
 const uploadProbe = async (port: number, options: UploadOptions): Promise<ProbeResponse> => {
     const form = new FormData();
+
+    for (const extra of options.extraFields ?? []) {
+        form.append(extra.name, extra.value);
+    }
 
     if (!options.omitFile) {
         // `new Uint8Array(...)` rather than the Buffer directly: Node's `Buffer`
@@ -683,6 +694,70 @@ const main = async (): Promise<void> => {
         );
     } finally {
         bigOversize.close();
+    }
+
+    /* ── D2. the multipart field-name limits (P1.6.4) ─────────────────── */
+    section('D2. Field-name limits (no nesting, no array indices)');
+
+    const fieldLimits = await listen(buildProbeApp({ withGuard: true, counter: 'guarded' }));
+
+    try {
+        const port = portOf(fieldLimits);
+
+        const plain = await uploadProbe(port, {
+            bytes: PNG_BYTES,
+            filename: 'plain.png',
+            declaredType: 'image/png',
+        });
+
+        check(
+            'the plain `file` field still uploads (depth 0 does not break the real client)',
+            plain.status === 201 && envelopeOf(plain.body).success === true,
+            `${plain.status} ${plain.text.slice(0, 80)}`
+        );
+
+        const nested = await uploadProbe(port, {
+            bytes: PNG_BYTES,
+            filename: 'nested.png',
+            declaredType: 'image/png',
+            extraFields: [{ name: 'items[0]', value: 'x' }],
+        });
+
+        check(
+            'a nested text field name is refused with 400, not accepted',
+            nested.status === 400,
+            `${nested.status} ${nested.text.slice(0, 80)}`
+        );
+        check(
+            'and it is refused for the nesting reason specifically (multer LIMIT_FIELD_NESTING)',
+            envelopeOf(nested.body).message === 'Field name nesting too deep',
+            `${JSON.stringify(envelopeOf(nested.body).message)}`
+        );
+
+        const hugeIndex = await uploadProbe(port, {
+            bytes: PNG_BYTES,
+            filename: 'index.png',
+            declaredType: 'image/png',
+            extraFields: [{ name: 'items[4294967294]', value: 'x' }],
+        });
+
+        check(
+            'the oversized-array-index shape is refused too (GHSA-535w-7cp7-47q4)',
+            hugeIndex.status === 400,
+            `${hugeIndex.status} ${hugeIndex.text.slice(0, 80)}`
+        );
+        check(
+            'at depth 0 it is the nesting limit that fires, so fieldArrayIndexLimit is the second layer',
+            envelopeOf(hugeIndex.body).message === 'Field name nesting too deep',
+            `${JSON.stringify(envelopeOf(hugeIndex.body).message)}`
+        );
+        check(
+            'neither refusal is a 500 — multer errors stay mapped to 400',
+            nested.status !== 500 && hugeIndex.status !== 500,
+            `${nested.status} / ${hugeIndex.status}`
+        );
+    } finally {
+        fieldLimits.close();
     }
 
     /* ── E. negative controls ─────────────────────────────────────────── */

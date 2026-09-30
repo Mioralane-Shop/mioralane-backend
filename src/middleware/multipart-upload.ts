@@ -63,17 +63,20 @@ export const createSingleFileUpload = (options: SingleFileUploadOptions): Reques
         limits: {
             fileSize: options.maxBytes,
             /*
-             * P1.5c — the two limits multer 2.3.0 added for the multipart DoS
-             * advisories (GHSA-72gw-mp4g-v24j, nested field names; GHSA-535w-7cp7-47q4,
-             * oversized array index). Both default to Infinity, so without them the
-             * patched multer still allocates whatever a crafted field name asks for.
-             * These routes accept exactly one field, `file` (`MULTIPART_FILE_FIELD`),
-             * with no bracket notation — so one level of nesting and zero array
-             * indices is strictly more than any real client sends. (Tighter still
-             * would be `fieldNestingDepth: 0`; left at 1 to match the advisory's
-             * guidance, and noted as a P1.6 tightening.)
+             * P1.5c added these two limits (multer 2.3.0 introduced them for the
+             * multipart DoS advisories GHSA-72gw-mp4g-v24j and
+             * GHSA-535w-7cp7-47q4); P1.6.4 tightened the depth from 1 to 0.
+             * Both default to Infinity, so without them the patched multer still
+             * allocates whatever a crafted field name asks for.
+             *
+             * These routes accept exactly one field, `file`
+             * (`MULTIPART_FILE_FIELD`), with no bracket notation — so depth 0 (no
+             * nesting at all) is provably more than any real client sends, and a
+             * name containing `[` is refused before the array-index limit is even
+             * consulted. `fieldArrayIndexLimit` stays as the second layer in case
+             * the depth is ever relaxed.
              */
-            fieldNestingDepth: 1,
+            fieldNestingDepth: 0,
             fieldArrayIndexLimit: 0,
         },
         // See the module header: this runs before the body exists, so it accepts
