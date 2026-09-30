@@ -113,3 +113,12 @@ jobs:
       # with a control showing `app.module` alone loads fine with that same secret.
       - name: Verify env validation
         run: npm run verify:env-validation
+
+      # P1.6.1. The enumeration, kept honest: the route files are parsed and
+      # compared against the table of param routes in both directions, so adding a
+      # param route without deciding what its param is fails CI. Plus the schema's
+      # own behaviour, the live 400 on the one unguarded param route, and the
+      # controls — including the one showing a malformed id that reaches a real
+      # query is a 400, not the 500 the brief assumed.
+      - name: Verify params validation
+        run: npm run verify:params-validation

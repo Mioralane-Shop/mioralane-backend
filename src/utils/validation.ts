@@ -100,3 +100,56 @@ export const safeUrlSchema = () =>
         .refine((url) => url === '' || url.startsWith('https://') || isSiteRelativePath(url), {
             message: SAFE_URL_MESSAGE,
         });
+
+/** Exact wording returned when {@link objectIdParam} rejects a value. */
+export const OBJECT_ID_PARAM_MESSAGE = 'Must be a 24-character hexadecimal id';
+
+/**
+ * A route parameter (`:id`, `:itemId`, `:productId`, …) that must be an ObjectId,
+ * for use as `validate({ params: objectIdParam('id') })` (P1.6.1).
+ *
+ * Why this exists on top of the hand-written `isValidObjectId` guards the
+ * controllers already had:
+ *
+ *  1. **One definition.** Every place that asked "is this an ObjectId?" now asks it
+ *     the same way. `mongoose.Types.ObjectId.isValid` and {@link OBJECT_ID_PATTERN}
+ *     happen to agree for strings in the mongoose version this project pins
+ *     (measured: both refuse a 12-character string, `isValid('abcdefghijkl')` is
+ *     `false`), but `isValid` is a different question — it also accepts an
+ *     `ObjectId` instance and an `{_id}`-shaped object, and its answer is a
+ *     property of the installed mongoose rather than of this project. The harness
+ *     asserts the two still agree, so a future major that widens `isValid` fails
+ *     there instead of silently widening what these routes accept.
+ *  2. **Refusal happens in the declared layer**, before any handler code runs,
+ *     which is where every other input contract on these routes already lives.
+ *
+ * The controllers keep their own checks. They are not redundant noise: they make
+ * the 400 a property of the handler that needs the id, so a route added without
+ * this middleware still refuses — dropping one layer cannot open a hole. Nothing
+ * here turns a malformed id into a query; it turns it into a 400 with the route's
+ * existing wording, passed by the caller as `validate({ message })` so no client
+ * sees a changed string.
+ *
+ * `passthroughNames` declares sibling params on the same path. They are read as
+ * plain strings because `validate()` REPLACES `req.params` with the parsed object
+ * — an undeclared sibling would be silently dropped, which on
+ * `/:itemType/:itemId/history` would have turned every request into a lookup for
+ * the default item type.
+ *
+ * No `.trim()`: whitespace around an id is not an id, and trimming would widen
+ * what the API accepts relative to the guards above.
+ */
+export const objectIdParam = (
+    name: string,
+    passthroughNames: readonly string[] = []
+): z.ZodType<Record<string, string>> => {
+    const shape: Record<string, z.ZodType<string>> = {
+        [name]: z.string().regex(OBJECT_ID_PATTERN, OBJECT_ID_PARAM_MESSAGE),
+    };
+
+    for (const passthroughName of passthroughNames) {
+        shape[passthroughName] = z.string();
+    }
+
+    return z.object(shape);
+};
