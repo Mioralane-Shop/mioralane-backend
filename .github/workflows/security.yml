@@ -122,3 +122,12 @@ jobs:
       # query is a 400, not the 500 the brief assumed.
       - name: Verify params validation
         run: npm run verify:params-validation
+
+      # P1.6-followup-a. The coupon release on cancellation: the two guards that
+      # keep a counter from going negative, the delete-first ordering that makes
+      # the release idempotent, the no-op cases driven through the real function,
+      # and the wiring that puts the call in the CANCELLED branch of the order
+      # transaction. The cases that need a real transaction are the opt-in
+      # integration layer, not this step.
+      - name: Verify coupon release on cancel
+        run: npm run verify:coupon-cancel

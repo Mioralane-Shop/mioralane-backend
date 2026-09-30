@@ -11,6 +11,7 @@ import {
   OrderItemStockLine,
   recordCancellationRestorations,
 } from '../inventory/inventory-transaction.service';
+import { releaseCouponUsageForOrder } from '../promotion/promotion.service';
 import { recordActivity } from '../activity-log/activity-log.service';
 import { canTransitionOrderStatus } from './order-status-transitions';
 
@@ -608,6 +609,7 @@ export const updateAdminOrderStatus = async (
       }
 
       let restoredStockLineCount = 0;
+      let couponUsageReleased = false;
 
       if (nextStatus === OrderStatus.CANCELLED) {
         const restoredStockLines: OrderItemStockLine[] = [];
@@ -640,6 +642,21 @@ export const updateAdminOrderStatus = async (
         }
 
         restoredStockLineCount = restoredStockLines.length;
+
+        // P1.6-followup-a: restoring stock was the only reversal a cancellation
+        // performed, so `coupon.usageCount`, the per-customer counter and the
+        // per-order `CouponUsage` row all survived it. A customer could spend a
+        // `perCustomerUsageLimit: 1` coupon, cancel, and spend it again.
+        //
+        // Same transaction as the stock restore, so a partially-cancelled order
+        // cannot exist: either the stock AND the coupon accounting both go back,
+        // or neither does. Runs after the restore deliberately — the release is
+        // the new behaviour, and keeping it last means a stock failure still
+        // leaves the code path it had before.
+        couponUsageReleased = await releaseCouponUsageForOrder(
+          { _id: order._id, user: order.user, coupon: order.coupon },
+          session
+        );
       }
 
       if (nextStatus === OrderStatus.DELIVERED && order.containsPreOrder && !order.preOrderReservationsReleased) {
@@ -671,7 +688,7 @@ export const updateAdminOrderStatus = async (
             : `Changed order ${order.orderNumber ?? orderId} status to ${nextStatus}`,
         before: { orderStatus: currentStatus },
         after: { orderStatus: nextStatus },
-        metadata: { restoredStockLineCount },
+        metadata: { restoredStockLineCount, couponUsageReleased },
         session,
       });
 

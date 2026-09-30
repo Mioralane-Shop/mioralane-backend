@@ -375,3 +375,108 @@ export const reserveCouponUsageForCustomer = async (
     );
   }
 };
+
+/**
+ * Filter used to give a consumed use back (P1.6-followup-a). Exported so the
+ * harness asserts the guard instead of reading it out of a query string.
+ *
+ * `$expr: { $gt: ['$usageCount', 0] }` is the whole point of it. Without that
+ * guard a second release drives the counter to -1, and a negative counter is not
+ * a harmless artefact: it hands the coupon an extra free use, which is the same
+ * class of asymmetry this function exists to close.
+ */
+export const couponUsageReleaseFilter = (
+  couponId: mongoose.Types.ObjectId | string
+): Record<string, unknown> => ({
+  _id: couponId,
+  $expr: { $gt: ['$usageCount', 0] },
+});
+
+export const couponUsageReleaseUpdate = { $inc: { usageCount: -1 } } as const;
+
+/**
+ * Counter filter counterpart of {@link couponUsageReleaseFilter}. The per-customer
+ * counter has no `$expr` need — `count` is a plain field — but it needs the same
+ * floor so it cannot go negative, and it is deliberately a no-op when no counter
+ * exists (an order placed before the counter was introduced), which `updateOne`
+ * gives for free.
+ */
+export const couponUsageCounterReleaseFilter = (
+  couponId: mongoose.Types.ObjectId | string,
+  userId: mongoose.Types.ObjectId | string
+): Record<string, unknown> => ({
+  couponId,
+  userId,
+  count: { $gt: 0 },
+});
+
+export const couponUsageCounterReleaseUpdate = { $inc: { count: -1 } } as const;
+
+/** What {@link releaseCouponUsageForOrder} needs from an order. */
+export type CouponUsageReleaseTarget = {
+  _id: mongoose.Types.ObjectId | string;
+  user?: mongoose.Types.ObjectId | string;
+  coupon?: { couponId?: mongoose.Types.ObjectId | string };
+};
+
+/**
+ * Gives back everything a cancelled order consumed from a coupon
+ * (P1.6-followup-a) — the mirror of `reserveCouponUsage` +
+ * `reserveCouponUsageForCustomer` + the `CouponUsage` row, in the caller's
+ * transaction.
+ *
+ * ## Why all three, not just the two counters
+ *
+ * `coupon.usageCount` is the global authority and `CouponUsageCounter` is the
+ * per-customer authority, but `CouponUsage` (one row per order) is what
+ * `validateCouponForOrder`'s friendly pre-check counts. Releasing the two counters
+ * and leaving the row would still refuse the coupon — with the pre-check's message
+ * rather than the counter's — so the cancellation would look fixed and not be.
+ *
+ * ## Idempotency is structural, not conditional
+ *
+ * The delete comes FIRST and its `deletedCount` decides everything else. That row
+ * is the record that *this order* consumed a use, so a second call deletes nothing,
+ * returns `false`, and touches no counter. The same property covers an order placed
+ * before the row existed (nothing to delete → no-op) and a coupon deleted after the
+ * order (the counter decrement is independent, and the `coupon.usageCount` update
+ * simply matches nothing). No flag on the order is needed, and no counter can be
+ * released twice even if a future path reaches this outside the CANCELLED branch.
+ *
+ * The guards do not make this atomic against a concurrent release — the order
+ * document's write is what serialises two cancels (see the note in
+ * `updateAdminOrderStatus`) — they make it safe if it ever is not.
+ *
+ * @returns `true` when this call released a use, `false` when there was nothing to
+ * release. The caller records it, because "the coupon was given back" is exactly
+ * the kind of thing an audit entry should not have to infer.
+ */
+export const releaseCouponUsageForOrder = async (
+  order: CouponUsageReleaseTarget,
+  session: mongoose.ClientSession
+): Promise<boolean> => {
+  const couponId = order.coupon?.couponId;
+  const userId = order.user;
+
+  if (!couponId || !userId) {
+    return false;
+  }
+
+  const released = await CouponUsage.deleteOne({ orderId: order._id, couponId }, { session }).exec();
+
+  if (released.deletedCount !== 1) {
+    return false;
+  }
+
+  await Coupon.findOneAndUpdate(couponUsageReleaseFilter(couponId), couponUsageReleaseUpdate, {
+    session,
+  }).exec();
+
+  await CouponUsageCounter.updateOne(
+    couponUsageCounterReleaseFilter(couponId, userId),
+    couponUsageCounterReleaseUpdate,
+    { session }
+  ).exec();
+
+  return true;
+};
