@@ -21,7 +21,8 @@
     "migrate:wishlist-items": "tsx src/scripts/migrate-wishlist-items.ts",
     "verify:file-upload": "tsx tests/verify-file-upload.ts",
     "verify:order-tampering": "tsx tests/verify-order-tampering.ts",
-    "verify:url-safety": "tsx tests/verify-url-safety.ts"
+    "verify:url-safety": "tsx tests/verify-url-safety.ts",
+    "verify:env-validation": "tsx tests/verify-env-validation.ts"
   },
   "dependencies": {
     "@imagekit/nodejs": "^7.11.0",

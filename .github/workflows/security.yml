@@ -106,3 +106,10 @@ jobs:
       # refuses a javascript: URL rather than something incidental.
       - name: Verify URL safety
         run: npm run verify:url-safety
+
+      # P1.6.2. The environment contract: the schema refuses a missing, short or
+      # placeholder JWT_SECRET, `api/index.ts` calls it (not just `main.ts`), and
+      # the real entrypoint is spawned to prove a bad secret fails the cold start —
+      # with a control showing `app.module` alone loads fine with that same secret.
+      - name: Verify env validation
+        run: npm run verify:env-validation
