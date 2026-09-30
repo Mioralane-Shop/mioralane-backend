@@ -65,6 +65,7 @@ import {
 } from '../src/inventory/inventory.controller';
 import { mediaUploadSchema } from '../src/media/media-upload.schemas';
 import {
+    COUPON_CODE_PATTERN,
     createCampaignSchema,
     createCouponSchema,
     updateCampaignSchema,
@@ -1541,6 +1542,67 @@ const checkPromotionSchemas = async (url: string): Promise<void> => {
         "coupon: '  save  10 ' is normalised to 'SAVE10' exactly as normalizeCouponCode does",
         messyCode.status === 200 && messyCodeValue === 'SAVE10',
         `status=${messyCode.status} code=${JSON.stringify(messyCodeValue)}`,
+    );
+
+    /* ── coupon: code charset (P1.6.7) ──────────────────────────────────────── */
+
+    // The rule is asserted from the exported constant, never re-typed here, so a
+    // change to the pattern cannot leave this section testing the old one.
+    check(
+        'coupon: the exported pattern is the documented allowlist',
+        COUPON_CODE_PATTERN.source === '^[A-Z0-9_-]{2,40}$',
+        COUPON_CODE_PATTERN.source,
+    );
+
+    const codeCases: Array<{ code: unknown; accepted: boolean; why: string }> = [
+        { code: 'SAVE10', accepted: true, why: 'the plain case' },
+        { code: 'save10', accepted: true, why: 'normalised to upper case first' },
+        { code: 'SAVE 10', accepted: true, why: 'whitespace is stripped' },
+        { code: 'SUMMER-25_BD', accepted: true, why: 'hyphen and underscore are allowed' },
+        { code: 'AB', accepted: true, why: 'the 2-character lower bound' },
+        { code: 'A'.repeat(40), accepted: true, why: 'the 40-character upper bound' },
+        { code: 'A', accepted: false, why: 'shorter than the lower bound' },
+        { code: 'A'.repeat(41), accepted: false, why: 'longer than the upper bound' },
+        { code: 'SAVE@10', accepted: false, why: 'a character outside the allowlist' },
+        { code: 'SAVE$10', accepted: false, why: 'the operator sigil must not be storable' },
+        { code: 'SAVE.10', accepted: false, why: 'a dot is not in the allowlist' },
+        { code: 'SUM&MER', accepted: false, why: 'an ampersand is not in the allowlist' },
+        { code: 'সেভ১০', accepted: false, why: 'a non-ASCII code' },
+    ];
+
+    for (const entry of codeCases) {
+        const response = await postJson(`${url}/promotion/coupon`, {
+            ...validCouponCreate,
+            code: entry.code,
+        });
+
+        check(
+            `coupon: ${JSON.stringify(entry.code)} is ${entry.accepted ? 'accepted' : 'refused'} (${entry.why})`,
+            entry.accepted ? response.status === 200 : response.status === 400,
+            `status=${response.status} body=${JSON.stringify(response.body).slice(0, 200)}`,
+        );
+    }
+
+    // An empty code keeps its original wording — the charset rule must not become
+    // the message a client shows for "you did not type anything".
+    const emptyCode = await postJson(`${url}/promotion/coupon`, { ...validCouponCreate, code: '' });
+    const emptyCodeIssues = JSON.stringify(emptyCode.body.errors);
+    check(
+        'coupon: an empty code still reports "Coupon code is required"',
+        emptyCode.status === 400 && emptyCodeIssues.includes('Coupon code is required'),
+        `status=${emptyCode.status} errors=${emptyCodeIssues.slice(0, 160)}`,
+    );
+
+    // Discrimination: the same request must NOT be refused when the pattern accepts
+    // it, otherwise every check above would pass on a route that rejects everything.
+    const acceptControl = await postJson(`${url}/promotion/coupon`, {
+        ...validCouponCreate,
+        code: 'CONTROL-1',
+    });
+    check(
+        'coupon: control — a code inside the allowlist is still accepted',
+        acceptControl.status === 200,
+        `status=${acceptControl.status}`,
     );
 
     /* ── coupon: mass assignment (usageCount is the important one) ──────────── */
