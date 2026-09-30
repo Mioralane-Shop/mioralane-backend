@@ -1,15 +1,16 @@
 /**
- * P1.4 Block A — stored URL safety (decisions ①/②).
+ * P1.4 Block A — stored URL safety (decisions ①②). Block D added the eighth field.
  *
  * Run with: npm run verify:url-safety
  *
  * ## The hole this closes
  *
- * Seven fields across five schemas accept a string an admin types and a client
- * later binds to an `href`. The only constraint on all seven was "is a string", so
- * a stored `javascript:…` became script execution on the storefront with nothing
- * in between — the storefront wrote both the campaign CTA and the announcement URL
- * straight into `href`.
+ * Eight fields across five schemas accept a string an admin types and a client
+ * later binds to an `href` or an `<img src>`. The only constraint on all of them
+ * was "is a string", so a stored `javascript:…` became script execution on the
+ * storefront with nothing in between — the storefront wrote both the campaign CTA
+ * and the announcement URL straight into `href`, and the campaign poster straight
+ * into `<Image src>`.
  *
  * ## What is asserted
  *
@@ -52,7 +53,7 @@ const SCHEMA_FILE_EXPECTATIONS: { label: string; file: string; guarded: number }
     {
         label: 'promotion.schemas.ts',
         file: join(SRC_DIR, 'promotion', 'promotion.schemas.ts'),
-        guarded: 1,
+        guarded: 2,
     },
     {
         label: 'announcement.schemas.ts',
@@ -256,6 +257,10 @@ const main = (): void => {
             field: asField(createCampaignSchema.shape.popup.unwrap().shape.ctaUrl.unwrap()),
         },
         {
+            label: 'campaign.popup.posterUrl',
+            field: asField(createCampaignSchema.shape.popup.unwrap().shape.posterUrl.unwrap()),
+        },
+        {
             label: 'announcement.messages[].url',
             field: asField(announcementSettingsSchema.shape.messages.unwrap().element.shape.url.unwrap()),
         },
@@ -263,8 +268,8 @@ const main = (): void => {
     ];
 
     check(
-        'all seven guarded fields are reachable in the real schemas',
-        guardedFields.length === 7,
+        'all eight guarded fields are reachable in the real schemas',
+        guardedFields.length === 8,
         `found ${guardedFields.length}`
     );
 
@@ -369,6 +374,27 @@ const main = (): void => {
     });
     check('a campaign popup pointing at a site-relative CTA parses', campaignOk.success, describe(campaignOk));
 
+    const campaignPoster = createCampaignSchema.safeParse({
+        ...campaignPayload,
+        popup: { enabled: true, posterUrl: JAVASCRIPT_URL },
+    });
+    check('campaign popup with a javascript: posterUrl is refused', !campaignPoster.success);
+    check(
+        'and the issue is blamed on popup.posterUrl',
+        messageFor(campaignPoster, ['popup', 'posterUrl']) === SAFE_URL_MESSAGE,
+        `issue path was ${JSON.stringify(messageFor(campaignPoster, ['popup', 'posterUrl']))}`
+    );
+
+    const campaignPosterOk = createCampaignSchema.safeParse({
+        ...campaignPayload,
+        popup: { enabled: true, posterUrl: 'https://ik.imagekit.io/mioralane/tr:w-800/poster.webp' },
+    });
+    check(
+        'the ImageKit poster URL the admin form actually uploads still parses',
+        campaignPosterOk.success,
+        describe(campaignPosterOk)
+    );
+
     const announcementPayload = {
         enabled: true,
         messages: [{ text: 'Free delivery over 2000 BDT', url: '/shop' }],
@@ -447,6 +473,23 @@ const main = (): void => {
         !mediaAssetSchema.safeParse({ url: JAVASCRIPT_URL }).success
     );
 
+    // Block D: `posterUrl` was this exact shape until it was guarded, which is what
+    // the campaign poster case in §C would have accepted. The twin is the evidence
+    // that the guard, and not something else, is what refuses it now.
+    const posterTwin = z.string().trim().optional();
+    check(
+        'a bare z.string().trim().optional() — the old posterUrl shape — ACCEPTS javascript:',
+        posterTwin.safeParse(JAVASCRIPT_URL).success,
+        'if this failed, the poster guard would be measuring nothing'
+    );
+    check(
+        'and the real campaign schema now refuses the same value at popup.posterUrl',
+        !createCampaignSchema.safeParse({
+            ...campaignPayload,
+            popup: { enabled: true, posterUrl: JAVASCRIPT_URL },
+        }).success
+    );
+
     // ---------------------------------------------------------------------
     section('E. Source: the guard cannot silently leave a site');
     // ---------------------------------------------------------------------
@@ -463,15 +506,15 @@ const main = (): void => {
             total + (readSource(file).match(/safeUrlSchema\(\)/g) ?? []).length,
         0
     );
-    check('seven guard call-sites across the five schema files', guardedTotal === 7, `found ${guardedTotal}`);
+    check('eight guard call-sites across the five schema files', guardedTotal === 8, `found ${guardedTotal}`);
 
     const allSchemaSource = SCHEMA_FILE_EXPECTATIONS.map(({ file }) => readSource(file)).join('\n');
     check(
         'no guarded site has reverted to a bare z.string()',
-        !/(images: z\.array\(z\.string\(\)\)|hoverImage: z\.string\(\)|ctaUrl: z\.string\(\))/.test(
+        !/(images: z\.array\(z\.string\(\)\)|hoverImage: z\.string\(\)|ctaUrl: z\.string\(\)|posterUrl: z\.string\(\))/.test(
             allSchemaSource
         ),
-        'only these three are grepped: `url` is too common a field name to assert globally'
+        'only these four are grepped: `url` is too common a field name to assert globally'
     );
 
     check(
@@ -481,8 +524,14 @@ const main = (): void => {
 
     const promotionSource = readSource(join(SRC_DIR, 'promotion', 'promotion.schemas.ts'));
     check(
-        'posterUrl is deliberately NOT guarded — it only reaches src=/alt=, which are inert',
-        /posterUrl: z\.string\(\)\.trim\(\)\.optional\(\)/.test(promotionSource)
+        'posterUrl IS guarded (Block D) — it reaches <Image src> in the storefront popup',
+        /posterUrl: safeUrlSchema\(\)\.optional\(\)/.test(promotionSource),
+        'Block A excluded it as inert; a src is not inert once the renderer is not the only guard'
+    );
+    check(
+        'promotion.schemas.ts has not left a bare posterFileId/postAlt URL-shaped field guarded',
+        /posterFileId: z\.string\(\)\.trim\(\)\.optional\(\)/.test(promotionSource),
+        'posterFileId is an opaque ImageKit id and posterAlt is alt text; neither is a URL'
     );
 
     const validationSource = readSource(VALIDATION_FILE);

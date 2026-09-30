@@ -88,7 +88,10 @@ const campaignFields = {
     popup: z
         .object({
             enabled: z.boolean().optional(),
-            posterUrl: z.string().trim().optional(),
+            // Block D: the poster reaches `<Image src>` in the storefront popup, so
+            // it is held to the same allowlist as every other stored URL rather than
+            // trusted to the renderer's own image-host check.
+            posterUrl: safeUrlSchema().optional(),
             posterFileId: z.string().trim().optional(),
             posterAlt: z.string().trim().optional(),
             actionType: z.enum(POPUP_ACTION_TYPES).optional(),
