@@ -462,7 +462,7 @@ export const createOrder = async (req: AuthenticatedRequest, res: Response): Pro
               },
             },
             { $inc: { 'preOrder.reservedQuantity': item.quantity } },
-            { new: true, session }
+            { returnDocument: 'after', session }
           ).exec();
 
           if (!updated) {
@@ -477,12 +477,12 @@ export const createOrder = async (req: AuthenticatedRequest, res: Response): Pro
             ? await Combo.findOneAndUpdate(
               { _id: item.sourceId, stock: { $gte: item.quantity } },
               { $inc: { stock: -item.quantity } },
-              { new: true, session }
+              { returnDocument: 'after', session }
             ).exec()
             : await Product.findOneAndUpdate(
               { _id: item.sourceId, stock: { $gte: item.quantity } },
               { $inc: { stock: -item.quantity } },
-              { new: true, session }
+              { returnDocument: 'after', session }
             ).exec();
 
         if (!updated) {

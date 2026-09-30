@@ -200,7 +200,7 @@ const releasePreOrderReservation = async (
           stock: quantity,
         },
       },
-      { new: true, session }
+      { returnDocument: 'after', session }
     ).exec();
 
     if (arrivedUpdate) {
@@ -215,7 +215,7 @@ const releasePreOrderReservation = async (
       ...(options.returnToSellableStockOnArrived ? { 'preOrder.status': { $ne: 'arrived' } } : {}),
     },
     { $inc: { 'preOrder.reservedQuantity': -quantity } },
-    { new: true, session }
+    { returnDocument: 'after', session }
   ).exec();
 
   if (!reservationUpdate) {
@@ -269,12 +269,12 @@ const restoreCancelledOrderItemStock = async (
       ? await Combo.findByIdAndUpdate(
         item.sourceId,
         { $inc: { stock: quantity } },
-        { new: true, session }
+        { returnDocument: 'after', session }
       ).exec()
       : await Product.findByIdAndUpdate(
         item.sourceId,
         { $inc: { stock: quantity } },
-        { new: true, session }
+        { returnDocument: 'after', session }
       ).exec();
 
   if (!updatedItem) {

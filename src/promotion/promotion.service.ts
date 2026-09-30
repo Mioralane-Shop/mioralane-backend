@@ -312,7 +312,7 @@ export const reserveCouponUsage = async (
   const updated = await Coupon.findOneAndUpdate(
     { _id: coupon._id, $or: [{ totalUsageLimit: { $exists: false } }, { $expr: { $lt: ['$usageCount', '$totalUsageLimit'] } }] },
     { $inc: { usageCount: 1 } },
-    { session, new: true }
+    { session, returnDocument: 'after' }
   ).exec();
 
   if (!updated) {
@@ -364,7 +364,7 @@ export const reserveCouponUsageForCustomer = async (
   const reserved = await CouponUsageCounter.findOneAndUpdate(
     { couponId, userId: userObjectId, $expr: { $lt: ['$count', perCustomerLimit] } },
     { $inc: { count: 1 } },
-    { new: true, session }
+    { returnDocument: 'after', session }
   ).exec();
 
   if (!reserved) {

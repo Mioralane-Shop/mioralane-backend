@@ -295,7 +295,7 @@ export const applyStockDelta = async (
         .findOneAndUpdate(
             filter,
             { $inc: { stock: input.quantityChange } },
-            { new: true, session: input.session }
+            { returnDocument: 'after', session: input.session }
         )
         .select('stock title name')
         .exec();
