@@ -3,11 +3,10 @@
 # Added in P1.5: the audit found 28 vulnerable packages in this repo alone, with
 # nothing watching for the next one. Two repo-specific decisions:
 #
-#   * `@nestjs/*` is excluded. The audit established that `src/modules/**` — the
-#     NestJS/TypeORM scaffold — is imported by no entrypoint (`main.ts` imports
-#     `./app.module`, which is plain Express 5), so the six NestJS findings are
-#     advisories in unreachable code. The fix is deletion (see
-#     `src/modules/DELETION_PLAN.md`), not a 10.x -> 12.x major.
+#   * There is no `@nestjs/*` exclusion any more. It existed because the audit found
+#     six advisories in a NestJS/TypeORM scaffold that no entrypoint imported, and
+#     the decision was to delete it rather than upgrade it. That deletion happened
+#     in P1.7 — the dependencies are gone, so there is nothing left to ignore.
 #   * `typescript` majors are excluded: `verify:types` type-checks the whole test
 #     tree, so that one should be a deliberate migration too.
 #
@@ -33,7 +32,6 @@ updates:
         update-types:
           - patch
     ignore:
-      - dependency-name: "@nestjs/*"
       - dependency-name: typescript
         update-types:
           - version-update:semver-major
