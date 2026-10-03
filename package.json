@@ -11,6 +11,7 @@
     "start:prod": "node -r tsconfig-paths/register dist/main",
     "dev": "tsx watch src/main.ts",
     "verify:types": "tsc -p tsconfig.tests.json",
+    "verify:api-types": "tsc -p tsconfig.api-check.json",
     "verify:route-guards": "tsx tests/verify-admin-route-guards.ts",
     "verify:validation": "tsx tests/verify-validation.ts",
     "verify:error-handler": "tsx tests/verify-error-handler.ts",

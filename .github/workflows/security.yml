@@ -70,6 +70,12 @@ jobs:
       - name: Type-check src + tests
         run: npm run verify:types
 
+      # P1.7b. `api/index.ts` — the handler Vercel actually runs — was in NO tsconfig:
+      # tsconfig.json includes src/**, tsconfig.tests.json adds tests/**, and rootDir
+      # prevents either from pulling in api/. A type error there reached main unseen.
+      - name: Type-check api (Vercel entrypoint)
+        run: npm run verify:api-types
+
       - name: Verify validation layer
         run: npm run verify:validation
 
