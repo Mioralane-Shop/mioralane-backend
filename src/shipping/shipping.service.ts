@@ -23,7 +23,6 @@ export type ShippingAddressInput = {
   detailedAddress?: string;
   fullAddress?: string;
   landmark?: string;
-  deliveryZone?: DeliveryZone;
 };
 
 export type NormalizedShippingAddress = {
@@ -373,7 +372,7 @@ export const upsertShippingSettings = async (body: any): Promise<ShippingSetting
   const settings = await ShippingSettings.findOneAndUpdate(
     { singletonKey: 'shipping_settings' },
     normalized,
-    { new: true, upsert: true, runValidators: true, setDefaultsOnInsert: true }
+    { returnDocument: 'after', upsert: true, runValidators: true, setDefaultsOnInsert: true }
   ).exec();
 
   return serializeShippingSettings(settings);

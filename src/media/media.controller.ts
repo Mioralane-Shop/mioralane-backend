@@ -13,18 +13,17 @@ import {
   RateLimitError,
   UnprocessableEntityError,
 } from '@imagekit/nodejs';
-import { ImageKitService, SupportedImageMimeType } from '../imagekit/imagekit.service';
+import { ImageKitService } from '../imagekit/imagekit.service';
+import { MAX_MEDIA_UPLOAD_SIZE_BYTES } from './image-upload-policy';
+import {
+  EMPTY_IMAGE_MESSAGE,
+  MISSING_IMAGE_MESSAGE,
+  UNSUPPORTED_IMAGE_MESSAGE,
+  readImageMimeType,
+  readUploadedFile,
+} from '../middleware/upload-validator.middleware';
 import { MediaAssetType } from './media.types';
 import type { MediaUploadInput } from './media-upload.schemas';
-
-type MulterFile = {
-  buffer: Buffer;
-  originalname: string;
-  mimetype: string;
-  size: number;
-};
-
-const MAX_MEDIA_UPLOAD_SIZE_BYTES = 8 * 1024 * 1024;
 
 const getStatusCode = (error: unknown): number => {
   if (error instanceof BadRequestError) return 400;
@@ -78,15 +77,21 @@ export class MediaController {
     assetType: MediaAssetType
   ): Promise<void> {
     try {
-      const file = (req as Request & { file?: MulterFile }).file;
+      const file = readUploadedFile(req);
 
       // The former `if (!assetType)` 400 was removed in P0-3.8: the schema now
       // rejects a missing/unknown assetType with the identical message, before
       // this controller is reached.
+      //
+      // The file/content checks below are the last line of defence, kept
+      // deliberately (P1.2): `requireImageUpload()` already answered for the
+      // mounted routes, so these branches are unreachable from them. They exist
+      // so that a future route which forgets the middleware refuses the upload
+      // instead of storing an unvalidated file — refusal, never a silent pass.
       if (!file) {
         res.status(400).json({
           success: false,
-          message: 'file is required',
+          message: MISSING_IMAGE_MESSAGE,
         });
         return;
       }
@@ -96,7 +101,7 @@ export class MediaController {
       if (actualByteSize <= 0) {
         res.status(400).json({
           success: false,
-          message: 'Invalid or empty upload',
+          message: EMPTY_IMAGE_MESSAGE,
         });
         return;
       }
@@ -109,12 +114,15 @@ export class MediaController {
         return;
       }
 
-      const detectedMimeType = this.imageKitService.detectImageMimeType(file.buffer);
+      // Read, not re-detected (P1.2): the type that passed the guard is the type
+      // that names the stored file, so the decision cannot disagree with the
+      // outcome. Absent means the guard did not run — refuse.
+      const detectedMimeType = readImageMimeType(req);
 
-      if (!detectedMimeType) {
+      if (detectedMimeType === undefined) {
         res.status(400).json({
           success: false,
-          message: 'Only JPEG, PNG, and WebP images are allowed',
+          message: UNSUPPORTED_IMAGE_MESSAGE,
         });
         return;
       }
@@ -126,7 +134,7 @@ export class MediaController {
           mimetype: file.mimetype,
           size: actualByteSize,
         },
-        detectedMimeType as SupportedImageMimeType,
+        detectedMimeType,
         assetType
       );
 

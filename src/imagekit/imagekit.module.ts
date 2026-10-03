@@ -1,6 +1,6 @@
 import { NextFunction, Request, RequestHandler, Response, Router } from 'express';
-import multer from 'multer';
-import { sanitizeErrorMessage } from '../middleware/error.middleware';
+import { createSingleFileUpload } from '../middleware/multipart-upload';
+import { requireImageUpload } from '../middleware/upload-validator.middleware';
 import { ImageKitController } from './imagekit.controller';
 import { ImageKitService } from './imagekit.service';
 
@@ -9,18 +9,15 @@ const MAX_TEST_UPLOAD_SIZE_BYTES = 5 * 1024 * 1024;
 const imageKitService = new ImageKitService();
 const imageKitController = new ImageKitController(imageKitService);
 
-const upload = multer({
-  storage: multer.memoryStorage(),
-  limits: {
-    fileSize: MAX_TEST_UPLOAD_SIZE_BYTES,
-  },
-  fileFilter: (
-    _req: Request,
-    _file: unknown,
-    callback: (error: Error | null, acceptFile?: boolean) => void
-  ) => {
-    callback(null, true);
-  },
+/**
+ * Shared pipeline (P1.2, G6). This route keeps its own tighter 5MB ceiling and
+ * its own 413 wording; everything else — memory storage, the accept-all
+ * `fileFilter`, and the `MulterError` mapping — comes from the factory used by
+ * `media.routes.ts`, so a fix to one path cannot miss the other.
+ */
+const handleSingleUpload: RequestHandler = createSingleFileUpload({
+  maxBytes: MAX_TEST_UPLOAD_SIZE_BYTES,
+  tooLargeMessage: 'File exceeds the temporary 5MB limit',
 });
 
 const isProduction = (): boolean => process.env.NODE_ENV === 'production';
@@ -37,47 +34,15 @@ const developmentOnly: RequestHandler = (_req, res, next) => {
   next();
 };
 
-const handleSingleUpload: RequestHandler = (req, res, next) => {
-  const onUploadComplete: NextFunction = (error) => {
-    if (!error) {
-      next();
-      return;
-    }
-
-    const uploadError = error as Error & { code?: string };
-
-    if (uploadError instanceof multer.MulterError) {
-      if (uploadError.code === 'LIMIT_FILE_SIZE') {
-        res.status(413).json({
-          success: false,
-          message: 'File exceeds the temporary 5MB limit',
-        });
-        return;
-      }
-
-      res.status(400).json({
-        success: false,
-        message: uploadError.message,
-      });
-      return;
-    }
-
-    const message = sanitizeErrorMessage(uploadError, 'Invalid upload request');
-    res.status(400).json({
-      success: false,
-      message,
-    });
-  };
-
-  upload.single('file')(req, res, onUploadComplete);
-};
-
 const router = Router();
 
 router.post(
   '/test-upload',
   developmentOnly,
   handleSingleUpload,
+  // Same content guard as the media route (P1.2): this route used to run its own
+  // detection with its own message, one of which listed GIF as allowed.
+  requireImageUpload(),
   (req: Request, res: Response, next: NextFunction) => {
     void imageKitController.testUpload(req, res).catch(next);
   }

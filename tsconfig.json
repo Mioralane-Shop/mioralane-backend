@@ -6,6 +6,13 @@
     "emitDecoratorMetadata": true,
     "experimentalDecorators": true,
     "allowSyntheticDefaultImports": true,
+    // P1.7a: `allowSyntheticDefaultImports` only silences the TYPE error — it does not
+    // change the emit. Without this line, `import dotenv from 'dotenv'` compiled to
+    // `require("dotenv")` followed by `.default.config()`, and a CJS-only package has
+    // no `.default`, so `npm start` and `start:prod` crashed at load on
+    // `TypeError: Cannot read properties of undefined (reading 'config')`.
+    // With it, TypeScript emits the `__importDefault` helper and the interop works.
+    "esModuleInterop": true,
     "target": "ES2021",
     "sourceMap": true,
     "outDir": "./dist",

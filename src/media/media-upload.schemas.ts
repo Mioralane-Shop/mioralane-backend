@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import type { MediaAssetType } from './media.types';
+import { safeUrlSchema } from '../utils/validation';
 
 /**
  * Runtime counterpart of `MediaAssetType` (`media.types.ts`). `satisfies` turns a
@@ -33,7 +34,7 @@ export const MEDIA_ASSET_TYPES = [
 export const mediaAssetSchema = z.object({
     provider: z.literal('imagekit').optional(),
     fileId: z.string().nullable().optional(),
-    url: z.string().optional(),
+    url: safeUrlSchema().optional(),
     name: z.string().optional(),
     width: z.number().optional(),
     height: z.number().optional(),

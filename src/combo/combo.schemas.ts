@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { mediaAssetSchema } from '../media/media-upload.schemas';
+import { safeUrlSchema } from '../utils/validation';
 
 /**
  * Body schemas for the two admin combo mutations (`POST /api/combos`,
@@ -35,9 +36,9 @@ const comboFields = {
     includedItems: z.array(z.string()).optional(),
     concerns: z.array(z.string()).optional(),
     /** ImageKit URLs. Derived from `media` when `media` is non-empty. */
-    images: z.array(z.string()).optional(),
+    images: z.array(safeUrlSchema()).optional(),
     media: z.array(mediaAssetSchema).optional(),
-    hoverImage: z.string().trim().optional(),
+    hoverImage: safeUrlSchema().optional(),
     size: z.string().trim().optional(),
     volume: z.string().trim().optional(),
     /** Routed through the inventory ledger on update, never `set()` directly. */

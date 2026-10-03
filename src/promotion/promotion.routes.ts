@@ -20,6 +20,7 @@ import {
   updateCampaignSchema,
   updateCouponSchema,
 } from './promotion.schemas';
+import { objectIdParam } from '../utils/validation';
 
 export const promotionPublicRoutes = Router();
 export const adminCampaignRoutes = Router();
@@ -33,7 +34,14 @@ adminCampaignRoutes.use(...adminGuard);
 adminCouponRoutes.use(...adminGuard);
 
 adminCampaignRoutes.get('/', listCampaigns as RequestHandler);
-adminCampaignRoutes.get('/:id', getCampaign as RequestHandler);
+// Campaign and coupon `:id` params are ObjectIds. `getParamId` + `isObjectId` in
+// the controller already refused a malformed one with these exact messages; the
+// param schema does it a layer earlier and keeps the wording (P1.6.1).
+adminCampaignRoutes.get(
+  '/:id',
+  validate({ params: objectIdParam('id'), message: 'Invalid campaign ID' }),
+  getCampaign as RequestHandler
+);
 adminCampaignRoutes.post(
   '/',
   validate({ body: createCampaignSchema }),
@@ -42,12 +50,21 @@ adminCampaignRoutes.post(
 adminCampaignRoutes.put(
   '/:id',
   validate({ body: updateCampaignSchema }),
+  validate({ params: objectIdParam('id'), message: 'Invalid campaign ID' }),
   updateCampaign as RequestHandler
 );
-adminCampaignRoutes.delete('/:id', deleteCampaign as RequestHandler);
+adminCampaignRoutes.delete(
+  '/:id',
+  validate({ params: objectIdParam('id'), message: 'Invalid campaign ID' }),
+  deleteCampaign as RequestHandler
+);
 
 adminCouponRoutes.get('/', listCoupons as RequestHandler);
-adminCouponRoutes.get('/:id', getCoupon as RequestHandler);
+adminCouponRoutes.get(
+  '/:id',
+  validate({ params: objectIdParam('id'), message: 'Invalid coupon ID' }),
+  getCoupon as RequestHandler
+);
 adminCouponRoutes.post(
   '/',
   validate({ body: createCouponSchema }),
@@ -56,6 +73,11 @@ adminCouponRoutes.post(
 adminCouponRoutes.put(
   '/:id',
   validate({ body: updateCouponSchema }),
+  validate({ params: objectIdParam('id'), message: 'Invalid coupon ID' }),
   updateCoupon as RequestHandler
 );
-adminCouponRoutes.delete('/:id', deleteCoupon as RequestHandler);
+adminCouponRoutes.delete(
+  '/:id',
+  validate({ params: objectIdParam('id'), message: 'Invalid coupon ID' }),
+  deleteCoupon as RequestHandler
+);
