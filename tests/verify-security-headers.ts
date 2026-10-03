@@ -56,9 +56,13 @@ const failures: string[] = [];
 
 /**
  * Assigned in `main()` from a dynamic import — see {@link ensureProbeEnv}.
- * Structurally the module's default export, without importing it eagerly.
+ *
+ * Typed from the module's own default export rather than restated by hand: a
+ * hand-written `(options?: {…}) => Express` annotation looks equivalent but is
+ * not, because Express's `Application` is not assignable to its `Express`
+ * interface. Deriving the type means the two can never drift.
  */
-let createApp: (options?: { skipDatabaseCheck?: boolean }) => Express;
+let createApp: typeof import('../src/app.module')['default'];
 
 /**
  * Inert ImageKit placeholders.
@@ -124,7 +128,12 @@ type ProbeResponse = {
     headers: Headers;
 };
 
-const listen = async (app: Express): Promise<Server> =>
+/**
+ * `express.Application`, not the exported `Express` type: `Express` *extends*
+ * `Application` (it adds the `request`/`response` singletons), so the two are not
+ * interchangeable — and `createApp()` is declared to return `Application`.
+ */
+const listen = async (app: express.Application): Promise<Server> =>
     new Promise<Server>((resolve) => {
         const server = app.listen(0, () => resolve(server));
     });

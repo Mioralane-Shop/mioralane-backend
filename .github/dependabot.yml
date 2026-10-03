@@ -1,0 +1,42 @@
+# Dependabot — API
+#
+# Added in P1.5: the audit found 28 vulnerable packages in this repo alone, with
+# nothing watching for the next one. Two repo-specific decisions:
+#
+#   * There is no `@nestjs/*` exclusion any more. It existed because the audit found
+#     six advisories in a NestJS/TypeORM scaffold that no entrypoint imported, and
+#     the decision was to delete it rather than upgrade it. That deletion happened
+#     in P1.7 — the dependencies are gone, so there is nothing left to ignore.
+#   * `typescript` majors are excluded: `verify:types` type-checks the whole test
+#     tree, so that one should be a deliberate migration too.
+#
+# Everything else — including the runtime packages that actually serve traffic
+# (`express`, `mongoose`, `helmet`, `express-rate-limit`, `multer`, `joi`) — is
+# left enabled, so the next `multer` advisory arrives as a PR instead of an audit.
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    groups:
+      dev-tooling:
+        dependency-type: development
+        update-types:
+          - minor
+          - patch
+      prod-patches:
+        dependency-type: production
+        update-types:
+          - patch
+    ignore:
+      - dependency-name: typescript
+        update-types:
+          - version-update:semver-major
+
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: monthly

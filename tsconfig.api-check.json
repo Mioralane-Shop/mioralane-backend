@@ -1,0 +1,11 @@
+{
+  "//": "P1.7b — type-checks api/index.ts, the production Vercel entrypoint, which is in NO other tsconfig: `tsconfig.json` includes only src/**, `tsconfig.tests.json` adds tests/**, and both leave api/ out because `rootDir: ./src` cannot contain a file above it. So a type error in the handler reached main unseen. Widening `rootDir` here (rather than in tsconfig.json, which would move the emit layout for the real build) keeps this a type-only program: noEmit, no declarations, no incremental cache. Run with: npm run verify:api-types",
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "declaration": false,
+    "incremental": false,
+    "rootDir": "."
+  },
+  "include": ["src/**/*", "api/**/*"]
+}

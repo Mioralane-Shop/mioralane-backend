@@ -2,6 +2,7 @@ import { Request, Response } from 'express';
 import { Product, IProduct, IProductDocument } from './product.model';
 import { getPaginationParams } from '../utils/pagination';
 import { slugify } from '../utils/slugify';
+import { OBJECT_ID_PATTERN } from '../utils/validation';
 import mongoose from 'mongoose';
 import { extractMediaUrls, normalizeMediaAssets } from '../media/media.utils';
 import type { MediaAsset } from '../media/media.types';
@@ -1269,8 +1270,12 @@ export const getProductByIdOrSlug = async (req: Request, res: Response): Promise
   try {
     const idOrSlug = req.params.idOrSlug as string;
 
-    // Determine if param is a MongoDB ObjectId or a slug
-    const isObjectId = mongoose.Types.ObjectId.isValid(idOrSlug);
+    // Determine if param is a MongoDB ObjectId or a slug.
+    //
+    // P1.6.1: the predicate is imported rather than re-typed, so this route and its
+    // combo twin cannot drift. Not a behaviour change — measured, `isValid` and
+    // OBJECT_ID_PATTERN agree for strings in this mongoose version.
+    const isObjectId = OBJECT_ID_PATTERN.test(idOrSlug);
 
     const query = isObjectId
       ? { _id: idOrSlug }

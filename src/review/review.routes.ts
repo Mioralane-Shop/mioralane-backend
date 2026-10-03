@@ -8,11 +8,17 @@ import {
     getProductReviewList,
 } from './review.controller';
 import { createReviewSchema } from './review.schemas';
+import { objectIdParam } from '../utils/validation';
 
 const router = Router();
 
-// Public — approved reviews only
-router.get('/product/:productId', getProductReviewList as RequestHandler);
+// Public — approved reviews only. `:productId` is an ObjectId; the service refuses
+// a malformed one with 'Invalid product ID', which `message` reproduces (P1.6.1).
+router.get(
+    '/product/:productId',
+    validate({ params: objectIdParam('productId'), message: 'Invalid product ID' }),
+    getProductReviewList as RequestHandler
+);
 
 // Authenticated customer flow
 router.post(
@@ -25,6 +31,7 @@ router.get('/me', protect as RequestHandler, getMyReviews as RequestHandler);
 router.get(
     '/eligibility/:productId',
     protect as RequestHandler,
+    validate({ params: objectIdParam('productId'), message: 'Invalid product ID' }),
     getMyReviewEligibility as RequestHandler
 );
 

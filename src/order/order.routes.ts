@@ -1,6 +1,7 @@
 import { Router, RequestHandler } from 'express';
 import { protect } from '../middleware/auth.middleware';
 import { validate } from '../middleware/validate.middleware';
+import { objectIdParam } from '../utils/validation';
 import { createOrderSchema } from './order.schemas';
 import { createOrder, getMyOrders, getOrderById } from './order.controller';
 
@@ -15,6 +16,13 @@ router.post(
   createOrder as RequestHandler
 );
 router.get('/', protect as RequestHandler, getMyOrders as RequestHandler);
-router.get('/:id', protect as RequestHandler, getOrderById as RequestHandler);
+// The handler refuses a malformed id with 'Invalid order ID'; the param schema
+// does it first, with that same wording, so the response is unchanged (P1.6.1).
+router.get(
+  '/:id',
+  protect as RequestHandler,
+  validate({ params: objectIdParam('id'), message: 'Invalid order ID' }),
+  getOrderById as RequestHandler
+);
 
 export default router;

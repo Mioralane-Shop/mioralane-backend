@@ -36,6 +36,7 @@ import {
   readRateLimitSettings,
 } from './middleware/rateLimiter.middleware';
 import { csrfOriginGuard } from './middleware/csrf.middleware';
+import { CSRF_HEADER, csrfTokenGuard } from './middleware/csrf-token.middleware';
 import { stripMongoOperators } from './middleware/strip-mongo-operators.middleware';
 import {
   CorsOriginDeniedError,
@@ -132,7 +133,11 @@ const createApp = (options: CreateAppOptions = {}): express.Application => {
       },
       credentials: true,
       methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-      allowedHeaders: ['Content-Type', 'Authorization'],
+      // `CSRF_HEADER` must be here or the browser's preflight refuses every
+      // state-changing request before it is even sent — a failure that looks
+      // nothing like a CSRF error. Imported rather than spelled out so the
+      // browser contract cannot drift from the header the guard reads.
+      allowedHeaders: ['Content-Type', 'Authorization', CSRF_HEADER],
       // Let the browser reuse a preflight result for a day instead of sending
       // one before every write. Without this, a preflight per request would
       // double the traffic the write limiter does not charge for.
@@ -150,8 +155,17 @@ const createApp = (options: CreateAppOptions = {}): express.Application => {
   app.use(cookieParser());
 
   // Reject cross-site state-changing requests before they reach the DB
-  // middleware or any route handler (see middleware/csrf.middleware.ts).
+  // middleware or any route handler.
+  //
+  // Two independent controls, in this order and both mandatory:
+  //   1. `csrfOriginGuard`  — the caller's Origin/Referer must be allowlisted.
+  //   2. `csrfTokenGuard`   — a request carrying a session must also prove it
+  //      holds the HMAC token for that session.
+  // Neither replaces the other: (1) fails open when a client omits both
+  // headers, which is exactly the gap (2) closes. See the module headers for
+  // why the token cannot be a classic double-submit cookie here.
   app.use(csrfOriginGuard);
+  app.use(csrfTokenGuard);
 
   // ── Rate limits ──────────────────────────────────────────────────────────
   // After the cheap guards (body parse, operator stripping, CSRF) and before

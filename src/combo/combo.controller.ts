@@ -2,6 +2,7 @@ import { Request, Response } from 'express';
 import { Combo, ICombo } from './combo.model';
 import { getPaginationParams } from '../utils/pagination';
 import { slugify } from '../utils/slugify';
+import { OBJECT_ID_PATTERN } from '../utils/validation';
 import mongoose from 'mongoose';
 import { extractMediaUrls, normalizeMediaAssets } from '../media/media.utils';
 import type { MediaAsset } from '../media/media.types';
@@ -383,8 +384,10 @@ export const getComboByIdOrSlug = async (req: Request, res: Response): Promise<v
             return;
         }
 
-        // Check if the parameter is a valid MongoDB ObjectId
-        const isObjectId = /^[0-9a-fA-F]{24}$/.test(idOrSlug);
+        // Same predicate as the product twin, imported rather than re-typed
+        // (P1.6.1): the two routes answer the same question and must not drift.
+        // The hand-written hex literal this replaces was already equivalent.
+        const isObjectId = OBJECT_ID_PATTERN.test(idOrSlug);
 
         const combo = isObjectId
             ? await Combo.findById(idOrSlug)

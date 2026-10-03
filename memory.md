@@ -3,7 +3,7 @@
 REST API for the **Mioralane** Korean-skincare e-commerce project. Deployed on **Vercel** (serverless).
 
 ## Tech Stack
-- **Node.js + TypeScript**, **Express 5** as the HTTP layer (NOT NestJS in practice — despite `package.json` still listing `@nestjs/*` deps, the app is built with `express`/`cors`/`cookie-parser` in `src/app.module.ts`).
+- **Node.js + TypeScript**, **Express 5** as the HTTP layer (NOT NestJS — the `@nestjs/*`/`typeorm` dependencies and the `src/modules/**` scaffold they served were **deleted in P1.7**; the app is built with `express`/`cors`/`cookie-parser` in `src/app.module.ts`).
 - **MongoDB + Mongoose 9** — NOT PostgreSQL (README is out of date). `src/data-source.ts` caches the connection promise for Vercel serverless reuse.
 - **JWT auth** (`jsonwebtoken` + `bcryptjs`), httpOnly cookie + Bearer header, **Google OAuth** login.
 - **Joi** for env validation, **Swagger** (`swagger-jsdoc` / `swagger-ui-express`) for API docs.
