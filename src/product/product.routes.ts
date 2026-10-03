@@ -15,6 +15,7 @@ import {
   productArrivalSchema,
   updateProductSchema,
 } from './product.schemas';
+import { objectIdParam } from '../utils/validation';
 
 const router = Router();
 
@@ -29,15 +30,32 @@ router.get('/:idOrSlug', getProductByIdOrSlug as RequestHandler);
 // get 401 from the guard, not a 400 that reveals the body contract.
 router.post('/', ...adminGuard, validate({ body: createProductSchema }), createProduct as RequestHandler);
 
-router.put('/:id', ...adminGuard, validate({ body: updateProductSchema }), updateProduct as RequestHandler);
+router.put(
+  '/:id',
+  ...adminGuard,
+  validate({ body: updateProductSchema }),
+  validate({ params: objectIdParam('id'), message: 'Invalid product ID' }),
+  updateProduct as RequestHandler
+);
 
 router.patch(
   '/:id/pre-order/arrive',
   ...adminGuard,
   validate({ body: productArrivalSchema }),
+  validate({ params: objectIdParam('id'), message: 'Invalid product ID' }),
   markPreOrderArrived as RequestHandler
 );
 
-router.delete('/:id', ...adminGuard, deleteProduct as RequestHandler);
+// Every admin route here takes an ObjectId `:id`. The param schema refuses a
+// malformed one before the handler, with the wording the handler already used, and
+// it is listed AFTER the body schema so a request wrong in both ways still answers
+// about the body, as before (P1.6.1). `:idOrSlug` above is deliberately excluded —
+// a slug is a valid value for that param, so it cannot use this schema.
+router.delete(
+  '/:id',
+  ...adminGuard,
+  validate({ params: objectIdParam('id'), message: 'Invalid product ID' }),
+  deleteProduct as RequestHandler
+);
 
 export default router;

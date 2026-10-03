@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { OBJECT_ID_PATTERN } from '../utils/validation';
+import { OBJECT_ID_PATTERN, safeUrlSchema } from '../utils/validation';
 
 /**
  * Request-body schemas for the four admin promotion mutations.
@@ -88,12 +88,15 @@ const campaignFields = {
     popup: z
         .object({
             enabled: z.boolean().optional(),
-            posterUrl: z.string().trim().optional(),
+            // Block D: the poster reaches `<Image src>` in the storefront popup, so
+            // it is held to the same allowlist as every other stored URL rather than
+            // trusted to the renderer's own image-host check.
+            posterUrl: safeUrlSchema().optional(),
             posterFileId: z.string().trim().optional(),
             posterAlt: z.string().trim().optional(),
             actionType: z.enum(POPUP_ACTION_TYPES).optional(),
             ctaLabel: z.string().trim().optional(),
-            ctaUrl: z.string().trim().optional(),
+            ctaUrl: safeUrlSchema().optional(),
             couponId: objectIdField.optional(),
         })
         .optional(),
@@ -145,18 +148,43 @@ export const updateCampaignSchema = z.object({
 });
 
 /**
- * Coupon code. Normalised here exactly as `normalizeCouponCode()` does (trim,
- * upper-case, strip whitespace) so the length bound is measured on the value that
- * will actually be stored.
+ * Coupon code charset (P1.6.7), applied after normalisation.
  *
- * Length only, no character allowlist: `code` is round-tripped on edit, so any
- * pattern stricter than the data already in the collection would make legacy
- * coupons impossible to save. A charset rule belongs with a data migration.
+ * Exported so the harness asserts the rule that ships rather than a copy of it.
+ */
+export const COUPON_CODE_PATTERN = /^[A-Z0-9_-]{2,40}$/;
+
+/** Exact wording returned when a code fails {@link COUPON_CODE_PATTERN}. */
+export const COUPON_CODE_MESSAGE =
+    'Coupon code must be 2-40 characters of A-Z, 0-9, hyphen or underscore';
+
+/**
+ * Coupon code. Normalised here exactly as `normalizeCouponCode()` does (trim,
+ * upper-case, strip whitespace) so the rule is measured on the value that will
+ * actually be stored — a lower-case code typed by an admin still passes, and the
+ * admin form already upper-cases as you type.
+ *
+ * Charset is an allowlist, added in P1.6.7. The note that used to live here said a
+ * stricter pattern would make existing coupons impossible to save on edit, because
+ * the form round-trips `code`, and that a charset rule belonged with a migration.
+ * That precondition was then measured rather than assumed: a read-only audit of the
+ * `coupons` collection found **1** document and it satisfies the pattern, so the
+ * rule is safe to add now. The reason it could not be added earlier is kept here,
+ * because it is still the reason to re-audit before ever tightening it further.
+ *
+ * The ceiling moves 60 -> 40 with the rule. Nothing in the collection exceeds 40
+ * characters, and a coupon code is something a customer types, so the shorter
+ * bound is the one that belongs in the contract.
  */
 const couponCodeField = z
     .string()
     .transform((value) => value.trim().toUpperCase().replace(/\s+/g, ''))
-    .pipe(z.string().min(1, 'Coupon code is required').max(60, 'Coupon code is too long'));
+    .pipe(
+        z
+            .string()
+            .min(1, 'Coupon code is required')
+            .regex(COUPON_CODE_PATTERN, COUPON_CODE_MESSAGE)
+    );
 
 /**
  * Coupon fields an admin may set. `usageCount` is absent on purpose — it is the

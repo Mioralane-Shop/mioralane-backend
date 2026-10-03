@@ -1,5 +1,7 @@
 import { Router, RequestHandler } from 'express';
 import { adminGuard } from '../middleware/auth.middleware';
+import { validate } from '../middleware/validate.middleware';
+import { objectIdParam } from '../utils/validation';
 import {
     getActivityActors,
     getAdminActivity,
@@ -21,7 +23,18 @@ activityLogRoutes.use(...adminGuard);
 activityLogRoutes.get('/actors', getActivityActors as RequestHandler);
 
 activityLogRoutes.get('/admin', listAdminActivity as RequestHandler);
-activityLogRoutes.get('/admin/:id', getAdminActivity as RequestHandler);
+// Both `:id` routes take an ObjectId. `getActivityLogById` already refuses a
+// malformed one with 'A valid activity id is required'; `message` reproduces that
+// wording verbatim so the param schema is invisible to clients (P1.6.1).
+activityLogRoutes.get(
+    '/admin/:id',
+    validate({ params: objectIdParam('id'), message: 'A valid activity id is required' }),
+    getAdminActivity as RequestHandler
+);
 
 activityLogRoutes.get('/participants', listParticipantActivity as RequestHandler);
-activityLogRoutes.get('/participants/:id', getParticipantActivity as RequestHandler);
+activityLogRoutes.get(
+    '/participants/:id',
+    validate({ params: objectIdParam('id'), message: 'A valid activity id is required' }),
+    getParticipantActivity as RequestHandler
+);

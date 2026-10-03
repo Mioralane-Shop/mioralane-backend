@@ -1,9 +1,6 @@
-import crypto from 'crypto';
-import path from 'path';
 import ImageKit, { toFile } from '@imagekit/nodejs';
 import type { MediaAssetType, MediaUploadResponseData } from '../media/media.types';
-
-export type SupportedImageMimeType = 'image/jpeg' | 'image/png' | 'image/webp' | 'image/gif';
+import { buildImageFileName, type SupportedImageMimeType } from '../media/image-upload-policy';
 
 export interface UploadedImageFile {
   buffer: Buffer;
@@ -34,37 +31,25 @@ const MEDIA_FILENAME_PREFIX_BY_TYPE: Record<MediaAssetType, string> = {
   // Review images are temporarily disabled.
   // review: 'mioralane-review',
 };
-const MIME_TO_EXTENSION: Record<SupportedImageMimeType, string> = {
-  'image/jpeg': '.jpg',
-  'image/png': '.png',
-  'image/webp': '.webp',
-  'image/gif': '.gif',
-};
 
-const MIME_TYPE_TO_EXTENSION: Record<string, string> = {
-  'image/jpeg': '.jpg',
-  'image/jpg': '.jpg',
-  'image/png': '.png',
-  'image/webp': '.webp',
-  'image/gif': '.gif',
-  'image/avif': '.avif',
-  'image/svg+xml': '.svg',
-  'image/heic': '.heic',
-  'image/heif': '.heif',
-};
-
-const sanitizeBaseName = (value: string): string => {
-  const normalized = value
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9.-]+/g, '-')
-    .replace(/-+/g, '-')
-    .replace(/^\.+/, '')
-    .replace(/^-+/, '')
-    .replace(/-+$/, '');
-
-  return normalized || 'image';
-};
+/**
+ * The ImageKit `checks` clause was removed here in P1.2a.
+ *
+ * P1.2 sent `checks: "'file.mime' IN [...] AND 'file.size' <= 8388608"` as a
+ * provider-side second layer. The syntax matched ImageKit's documentation but was
+ * never exercised against the live API, and the failure mode was severe: an
+ * invalid clause makes ImageKit reject the upload, so **every** upload would
+ * answer 400 `'ImageKit upload failed'`.
+ *
+ * The local guard (`middleware/upload-validator.middleware.ts`) is the tested
+ * control — 65 harness checks plus negative controls, no network, no credentials
+ * — so the unverified layer was not worth that blast radius.
+ *
+ * Re-adding it is tracked as a P1.6 chore: smoke-test the clause in dev with real
+ * credentials first, then reintroduce it generated from
+ * `MEDIA_IMAGE_MIME_ALLOWLIST` / `MAX_MEDIA_UPLOAD_SIZE_BYTES` rather than typed
+ * out. Git history (commit before P1.2a) has the exact string.
+ */
 
 export class ImageKitService {
   private readonly client: ImageKit;
@@ -91,64 +76,16 @@ export class ImageKitService {
     });
   }
 
-  detectImageMimeType(buffer: Buffer): SupportedImageMimeType | null {
-    if (buffer.length >= 8) {
-      const pngSignature = buffer.subarray(0, 8);
-      if (
-        pngSignature[0] === 0x89 &&
-        pngSignature[1] === 0x50 &&
-        pngSignature[2] === 0x4e &&
-        pngSignature[3] === 0x47 &&
-        pngSignature[4] === 0x0d &&
-        pngSignature[5] === 0x0a &&
-        pngSignature[6] === 0x1a &&
-        pngSignature[7] === 0x0a
-      ) {
-        return 'image/png';
-      }
-    }
-
-    if (buffer.length >= 3 && buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff) {
-      return 'image/jpeg';
-    }
-
-    if (buffer.length >= 12) {
-      const riff = buffer.toString('ascii', 0, 4);
-      const webp = buffer.toString('ascii', 8, 12);
-      if (riff === 'RIFF' && webp === 'WEBP') {
-        return 'image/webp';
-      }
-    }
-
-    if (buffer.length >= 6) {
-      const header = buffer.toString('ascii', 0, 6);
-      if (header === 'GIF87a' || header === 'GIF89a') {
-        return 'image/gif';
-      }
-    }
-
-    return null;
-  }
-
   buildTestFileName(originalname: string, mimeType: SupportedImageMimeType): string {
-    return this.buildFileName(DEFAULT_FILENAME_PREFIX, originalname, mimeType);
+    return buildImageFileName(DEFAULT_FILENAME_PREFIX, originalname, mimeType);
   }
 
   buildMediaFileName(assetType: MediaAssetType, originalname: string, mimeType: SupportedImageMimeType): string {
-    return this.buildFileName(MEDIA_FILENAME_PREFIX_BY_TYPE[assetType], originalname, mimeType);
+    return buildImageFileName(MEDIA_FILENAME_PREFIX_BY_TYPE[assetType], originalname, mimeType);
   }
 
   buildMediaFolder(assetType: MediaAssetType): string {
     return MEDIA_FOLDER_BY_TYPE[assetType];
-  }
-
-  private buildFileName(prefix: string, originalname: string, mimeType: SupportedImageMimeType): string {
-    const parsedName = path.parse(originalname).name;
-    const safeBaseName = sanitizeBaseName(parsedName);
-    const extension = MIME_TO_EXTENSION[mimeType] ?? '.img';
-    const uniqueSuffix = `${Date.now()}-${crypto.randomUUID()}`;
-
-    return `${prefix}-${safeBaseName}-${uniqueSuffix}${extension}`;
   }
 
   private mapUploadResponse(
@@ -178,7 +115,7 @@ export class ImageKitService {
     fileNamePrefix: string,
     folder: string
   ): Promise<MediaUploadResponseData> {
-    const fileName = this.buildFileName(fileNamePrefix, file.originalname, detectedMimeType);
+    const fileName = buildImageFileName(fileNamePrefix, file.originalname, detectedMimeType);
     const uploadable = await toFile(file.buffer, fileName, {
       type: detectedMimeType,
     });

@@ -54,7 +54,7 @@ export const getInventorySettings = async (): Promise<InventorySettingsValue> =>
   const settings = await InventorySettings.findOneAndUpdate(
     { singletonKey: 'inventory_settings' },
     { $setOnInsert: DEFAULT_INVENTORY_SETTINGS },
-    { new: true, upsert: true, setDefaultsOnInsert: true }
+    { returnDocument: 'after', upsert: true, setDefaultsOnInsert: true }
   )
     .lean()
     .exec();
@@ -83,7 +83,7 @@ export const upsertInventorySettings = async (payload: unknown): Promise<Invento
         singletonKey: 'inventory_settings',
       },
     },
-    { new: true, upsert: true, runValidators: true, setDefaultsOnInsert: true }
+    { returnDocument: 'after', upsert: true, runValidators: true, setDefaultsOnInsert: true }
   )
     .lean()
     .exec();

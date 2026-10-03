@@ -129,7 +129,7 @@ export const getCrossSellSettings = async (): Promise<CrossSellSettingsValue> =>
   const settings = await CrossSellSettings.findOneAndUpdate(
     { singletonKey: 'cross_sell_settings' },
     { $setOnInsert: DEFAULT_CROSS_SELL_SETTINGS },
-    { new: true, upsert: true, setDefaultsOnInsert: true }
+    { returnDocument: 'after', upsert: true, setDefaultsOnInsert: true }
   )
     .lean()
     .exec();
@@ -152,7 +152,7 @@ export const upsertCrossSellSettings = async (payload: unknown): Promise<CrossSe
         singletonKey: 'cross_sell_settings',
       },
     },
-    { new: true, upsert: true, runValidators: true, setDefaultsOnInsert: true }
+    { returnDocument: 'after', upsert: true, runValidators: true, setDefaultsOnInsert: true }
   )
     .lean()
     .exec();

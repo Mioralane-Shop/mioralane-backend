@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { numericField } from '../utils/validation';
+import { numericField, safeUrlSchema } from '../utils/validation';
 import { HEX_COLOR_PATTERN } from './announcement-settings.model';
 
 /**
@@ -51,7 +51,7 @@ export const announcementSettingsSchema = z.object({
                         `Message must be ${MAX_ANNOUNCEMENT_MESSAGE_LENGTH} characters or fewer`
                     )
                     .optional(),
-                url: z.string().trim().optional(),
+                url: safeUrlSchema().optional(),
             })
         )
         .optional(),

@@ -1,0 +1,146 @@
+# P1.0 — security verification for the API.
+#
+# CI only: no deploy step, no Vercel trigger, no secrets. Every step was run
+# locally with MONGODB_URI / JWT_SECRET / IMAGEKIT_* explicitly unset — the same
+# environment this job gets — so the harnesses are proven not to need secrets.
+# (They never load `.env`: only `main.ts` and `api/index.ts` import `src/env`.)
+name: Backend security verification
+
+on:
+  push:
+    branches:
+      # `main` so mainline commits stay verified after this hardening work merges.
+      # Without it the workflow would only ever run on the security branch, and a
+      # broken main would not be noticed until the next pull request.
+      - main
+      # `security/**` rather than `security/*` so a nested branch name such as
+      # `security/p1/csrf-token` also runs CI.
+      - 'security/**'
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+# Least privilege: this job only reads the repository.
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Type-check and run verification harnesses
+    runs-on: ubuntu-latest
+    # A hung job would otherwise sit for the 6-hour default.
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Node 24 — the LTS line, and the same major local development runs (v24.9.0),
+      # so CI and a developer's machine agree. This previously targeted 20, which
+      # ran the whole suite on a major nobody develops against; a skew like that is
+      # exactly how CI passes while local work breaks, or the reverse.
+      #
+      # The major line rather than an exact patch: `'24'` resolves to the newest
+      # published 24.x on the runner (24.21.0 as of writing), so CI keeps running
+      # and still picks up 24.x security releases. The cost is that the toolchain is
+      # not pinned byte-for-byte — an exact version can be substituted here if that
+      # guarantee is wanted and the runner can resolve it.
+      #
+      # 24 clears every requirement in the monorepo: the admin app is on Next 16
+      # (needs >= 20.9) and the storefront on Next 14 (needs >= 18.17). Every command
+      # in this workflow was run locally on v24.9.0 before it was committed, so this
+      # names the major those runs actually used.
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Type-check src (build scope)
+        run: npx tsc --noEmit
+
+      # Beyond the original brief, deliberately. `tsc --noEmit` above compiles
+      # `src/**` only, because tsconfig.json includes just that — so it cannot see
+      # `tests/`, where five real errors sat invisibly until this config was
+      # added. Without this step CI would not catch that class of error.
+      - name: Type-check src + tests
+        run: npm run verify:types
+
+      # P1.7b. `api/index.ts` — the handler Vercel actually runs — was in NO tsconfig:
+      # tsconfig.json includes src/**, tsconfig.tests.json adds tests/**, and rootDir
+      # prevents either from pulling in api/. A type error there reached main unseen.
+      - name: Type-check api (Vercel entrypoint)
+        run: npm run verify:api-types
+
+      # P1.7c. An installed-but-unimported package is not a vulnerability, it is a
+      # claim — which is why `passport`/`rxjs` survived three blocks and two audits.
+      # This asserts every declared dependency is referenced somewhere (or is on a
+      # short, reasoned allowlist), and that the allowlist has not gone stale.
+      - name: Verify no unused dependencies
+        run: npm run verify:unused-deps
+
+      - name: Verify validation layer
+        run: npm run verify:validation
+
+      - name: Verify error handler
+        run: npm run verify:error-handler
+
+      - name: Verify security headers, CORS, trust proxy and rate limits
+        run: npm run verify:security-headers
+
+      # P1.1. Runs the real middleware chain: the HMAC token guard, its four
+      # negative controls, the auth-bootstrap exemptions and the CORS
+      # `Access-Control-Allow-Headers` contract the browser depends on.
+      - name: Verify CSRF token guard
+        run: npm run verify:csrf
+
+      # P1.2. Drives the real multer factory and the real content guard over real
+      # multipart requests: the allowlist (GIF now refused), the name policy, the
+      # 8MB ceiling, and the wiring that puts the guard on both upload routes.
+      - name: Verify file upload validation
+        run: npm run verify:file-upload
+
+      # P1.3. The pure decisions (zone resolution, status transitions), the
+      # idempotency fingerprint, and the wiring/atomicity shape of everything that
+      # needs a database. The concurrent cases that need a replica set are the
+      # opt-in integration layer, not this step.
+      - name: Verify order tampering fixes
+        run: npm run verify:order-tampering
+
+      - name: Verify admin route guards
+        run: npm run verify:route-guards
+
+      # P1.4 Block A. The stored-URL allowlist (safeUrlSchema), the seven fields
+      # that carry an `href` value, and the twins that prove the refinement is what
+      # refuses a javascript: URL rather than something incidental.
+      - name: Verify URL safety
+        run: npm run verify:url-safety
+
+      # P1.6.2. The environment contract: the schema refuses a missing, short or
+      # placeholder JWT_SECRET, `api/index.ts` calls it (not just `main.ts`), and
+      # the real entrypoint is spawned to prove a bad secret fails the cold start —
+      # with a control showing `app.module` alone loads fine with that same secret.
+      - name: Verify env validation
+        run: npm run verify:env-validation
+
+      # P1.6.1. The enumeration, kept honest: the route files are parsed and
+      # compared against the table of param routes in both directions, so adding a
+      # param route without deciding what its param is fails CI. Plus the schema's
+      # own behaviour, the live 400 on the one unguarded param route, and the
+      # controls — including the one showing a malformed id that reaches a real
+      # query is a 400, not the 500 the brief assumed.
+      - name: Verify params validation
+        run: npm run verify:params-validation
+
+      # P1.6-followup-a. The coupon release on cancellation: the two guards that
+      # keep a counter from going negative, the delete-first ordering that makes
+      # the release idempotent, the no-op cases driven through the real function,
+      # and the wiring that puts the call in the CANCELLED branch of the order
+      # transaction. The cases that need a real transaction are the opt-in
+      # integration layer, not this step.
+      - name: Verify coupon release on cancel
+        run: npm run verify:coupon-cancel

@@ -16,6 +16,7 @@ import {
 } from './inventory.controller';
 import { inventoryOperationSchema } from './inventory.schemas';
 import { inventorySettingsSchema } from './inventory-settings.schemas';
+import { objectIdParam } from '../utils/validation';
 
 export const adminInventorySettingsRoutes = Router();
 
@@ -36,7 +37,13 @@ export const adminInventoryRoutes = Router();
 adminInventoryRoutes.use(...adminGuard);
 
 adminInventoryRoutes.get('/transactions', listInventoryTransactionHistory as RequestHandler);
-adminInventoryRoutes.get('/transactions/:id', getInventoryTransaction as RequestHandler);
+// `:id` is a ledger-entry ObjectId; `getInventoryTransactionById` refuses a
+// malformed one with 'A valid transactionId is required', reproduced verbatim.
+adminInventoryRoutes.get(
+  '/transactions/:id',
+  validate({ params: objectIdParam('id'), message: 'A valid transactionId is required' }),
+  getInventoryTransaction as RequestHandler
+);
 
 adminInventoryRoutes.post(
   '/stock-in',
@@ -69,4 +76,15 @@ adminInventoryRoutes.post(
   markInventoryLost as RequestHandler
 );
 
-adminInventoryRoutes.get('/:itemType/:itemId/history', getInventoryItemHistory as RequestHandler);
+// `:itemType` is declared alongside `:itemId` because `validate()` REPLACES
+// `req.params` — leaving it out would drop it and silently turn every request into
+// a lookup for the default item type. It is a plain string on purpose: the
+// controller normalises it (`normalizeInventoryItemType`).
+adminInventoryRoutes.get(
+  '/:itemType/:itemId/history',
+  validate({
+    params: objectIdParam('itemId', ['itemType']),
+    message: 'A valid itemId is required',
+  }),
+  getInventoryItemHistory as RequestHandler
+);

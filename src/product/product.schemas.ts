@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { numericField, OBJECT_ID_PATTERN } from '../utils/validation';
+import { numericField, OBJECT_ID_PATTERN, safeUrlSchema } from '../utils/validation';
 import { mediaAssetSchema } from '../media/media-upload.schemas';
 
 /**
@@ -93,9 +93,9 @@ const productFields = {
     salePrice: z.number().min(0, 'Sale price cannot be negative').optional(),
     /** Free-form in the model; the admin UI narrows it to Sale/Best/New. */
     badge: z.string().optional(),
-    images: z.array(z.string()).optional(),
+    images: z.array(safeUrlSchema()).optional(),
     media: z.array(mediaAssetSchema).optional(),
-    hoverImage: z.string().optional(),
+    hoverImage: safeUrlSchema().optional(),
     volume: z.string().optional(),
     /** Routed through the inventory ledger on update, never `set()` directly. */
     stock: z.number().int().min(0, 'Stock cannot be non-negative').optional(),

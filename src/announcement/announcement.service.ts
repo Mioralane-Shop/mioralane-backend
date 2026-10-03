@@ -63,7 +63,7 @@ export const getAnnouncementBarSettings = async (): Promise<AnnouncementBarSetti
     const settings = await AnnouncementBarSettings.findOneAndUpdate(
         { singletonKey: 'announcement_bar' },
         { $setOnInsert: DEFAULT_ANNOUNCEMENT_BAR_SETTINGS },
-        { new: true, upsert: true, setDefaultsOnInsert: true }
+        { returnDocument: 'after', upsert: true, setDefaultsOnInsert: true }
     )
         .lean()
         .exec();
@@ -196,7 +196,7 @@ export const upsertAnnouncementBarSettings = async (
             },
             $setOnInsert: { singletonKey: 'announcement_bar' },
         },
-        { new: true, upsert: true, runValidators: true, setDefaultsOnInsert: true }
+        { returnDocument: 'after', upsert: true, runValidators: true, setDefaultsOnInsert: true }
     )
         .lean()
         .exec();

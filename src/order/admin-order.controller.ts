@@ -11,7 +11,9 @@ import {
   OrderItemStockLine,
   recordCancellationRestorations,
 } from '../inventory/inventory-transaction.service';
+import { releaseCouponUsageForOrder } from '../promotion/promotion.service';
 import { recordActivity } from '../activity-log/activity-log.service';
+import { canTransitionOrderStatus } from './order-status-transitions';
 
 type AdminOrderUser = {
   id: string;
@@ -152,11 +154,12 @@ const ALLOWED_ORDER_STATUSES = Object.values(OrderStatus);
 
 const escapeRegex = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
-type HttpError = Error & { statusCode?: number };
+type HttpError = Error & { statusCode?: number; code?: string };
 
-const createHttpError = (statusCode: number, message: string): HttpError => {
+const createHttpError = (statusCode: number, message: string, code?: string): HttpError => {
   const error = new Error(message) as HttpError;
   error.statusCode = statusCode;
+  error.code = code;
   return error;
 };
 
@@ -197,7 +200,7 @@ const releasePreOrderReservation = async (
           stock: quantity,
         },
       },
-      { new: true, session }
+      { returnDocument: 'after', session }
     ).exec();
 
     if (arrivedUpdate) {
@@ -212,7 +215,7 @@ const releasePreOrderReservation = async (
       ...(options.returnToSellableStockOnArrived ? { 'preOrder.status': { $ne: 'arrived' } } : {}),
     },
     { $inc: { 'preOrder.reservedQuantity': -quantity } },
-    { new: true, session }
+    { returnDocument: 'after', session }
   ).exec();
 
   if (!reservationUpdate) {
@@ -266,12 +269,12 @@ const restoreCancelledOrderItemStock = async (
       ? await Combo.findByIdAndUpdate(
         item.sourceId,
         { $inc: { stock: quantity } },
-        { new: true, session }
+        { returnDocument: 'after', session }
       ).exec()
       : await Product.findByIdAndUpdate(
         item.sourceId,
         { $inc: { stock: quantity } },
-        { new: true, session }
+        { returnDocument: 'after', session }
       ).exec();
 
   if (!updatedItem) {
@@ -560,8 +563,26 @@ export const updateAdminOrderStatus = async (
         );
       }
 
+      // NOTE (P1.3, R7): two *concurrent* cancels are prevented by MongoDB's
+      // write conflict on the order document below rather than by an explicit
+      // predicate here — there is no atomic "cancel once" guard in this code. The
+      // sequential case is fully guarded (the CANCELLED block above, plus the
+      // same-status no-op below), and the ledger's unique index rejects a second
+      // restoration row. Recording it because the safety here is a property of
+      // the transaction, not of the code.
       if (currentStatus === nextStatus) {
         return order.toObject() as RawOrderRecord;
+      }
+
+      // P1.3 (R4): the value being a valid status was never enough — the
+      // transition has to be a legal progression. Without this, DELIVERED ->
+      // CANCELLED was accepted and restored stock for delivered goods.
+      if (!canTransitionOrderStatus(currentStatus, nextStatus)) {
+        throw createHttpError(
+          400,
+          `Order status cannot change from ${currentStatus} to ${nextStatus}`,
+          'INVALID_STATUS_TRANSITION'
+        );
       }
 
       if (nextStatus === OrderStatus.SHIPPED && order.containsPreOrder) {
@@ -588,6 +609,7 @@ export const updateAdminOrderStatus = async (
       }
 
       let restoredStockLineCount = 0;
+      let couponUsageReleased = false;
 
       if (nextStatus === OrderStatus.CANCELLED) {
         const restoredStockLines: OrderItemStockLine[] = [];
@@ -620,6 +642,21 @@ export const updateAdminOrderStatus = async (
         }
 
         restoredStockLineCount = restoredStockLines.length;
+
+        // P1.6-followup-a: restoring stock was the only reversal a cancellation
+        // performed, so `coupon.usageCount`, the per-customer counter and the
+        // per-order `CouponUsage` row all survived it. A customer could spend a
+        // `perCustomerUsageLimit: 1` coupon, cancel, and spend it again.
+        //
+        // Same transaction as the stock restore, so a partially-cancelled order
+        // cannot exist: either the stock AND the coupon accounting both go back,
+        // or neither does. Runs after the restore deliberately — the release is
+        // the new behaviour, and keeping it last means a stock failure still
+        // leaves the code path it had before.
+        couponUsageReleased = await releaseCouponUsageForOrder(
+          { _id: order._id, user: order.user, coupon: order.coupon },
+          session
+        );
       }
 
       if (nextStatus === OrderStatus.DELIVERED && order.containsPreOrder && !order.preOrderReservationsReleased) {
@@ -651,7 +688,7 @@ export const updateAdminOrderStatus = async (
             : `Changed order ${order.orderNumber ?? orderId} status to ${nextStatus}`,
         before: { orderStatus: currentStatus },
         after: { orderStatus: nextStatus },
-        metadata: { restoredStockLineCount },
+        metadata: { restoredStockLineCount, couponUsageReleased },
         session,
       });
 
@@ -699,6 +736,7 @@ export const updateAdminOrderStatus = async (
       res.status(httpError.statusCode).json({
         success: false,
         message: httpError.message,
+        code: httpError.code,
       });
       return;
     }

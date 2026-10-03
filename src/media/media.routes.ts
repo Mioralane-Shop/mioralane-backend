@@ -1,65 +1,25 @@
 import { NextFunction, Request, RequestHandler, Response, Router } from 'express';
-import multer from 'multer';
 import { adminGuard } from '../middleware/auth.middleware';
 import { validate } from '../middleware/validate.middleware';
-import { sanitizeErrorMessage } from '../middleware/error.middleware';
+import { createSingleFileUpload } from '../middleware/multipart-upload';
+import { requireImageUpload } from '../middleware/upload-validator.middleware';
 import { ImageKitService } from '../imagekit/imagekit.service';
 import { MediaController } from './media.controller';
 import { mediaUploadSchema } from './media-upload.schemas';
-
-const MAX_MEDIA_UPLOAD_SIZE_BYTES = 8 * 1024 * 1024;
+import { MAX_MEDIA_UPLOAD_SIZE_BYTES } from './image-upload-policy';
 
 const imageKitService = new ImageKitService();
 const mediaController = new MediaController(imageKitService);
 
-const upload = multer({
-  storage: multer.memoryStorage(),
-  limits: {
-    fileSize: MAX_MEDIA_UPLOAD_SIZE_BYTES,
-  },
-  fileFilter: (
-    _req: Request,
-    _file: unknown,
-    callback: (error: Error | null, acceptFile?: boolean) => void
-  ) => {
-    callback(null, true);
-  },
+/**
+ * Multer, built by the shared factory so this route and the dev-only test route
+ * cannot drift apart (P1.2, G6). Only the two things that genuinely differ here
+ * are passed: the 8MB ceiling and this route's 413 wording.
+ */
+const handleSingleUpload: RequestHandler = createSingleFileUpload({
+  maxBytes: MAX_MEDIA_UPLOAD_SIZE_BYTES,
+  tooLargeMessage: 'File exceeds the 8MB upload limit',
 });
-
-const handleSingleUpload: RequestHandler = (req, res, next) => {
-  const onUploadComplete: NextFunction = (error) => {
-    if (!error) {
-      next();
-      return;
-    }
-
-    const uploadError = error as Error & { code?: string };
-
-    if (uploadError instanceof multer.MulterError) {
-      if (uploadError.code === 'LIMIT_FILE_SIZE') {
-        res.status(413).json({
-          success: false,
-          message: 'File exceeds the 8MB upload limit',
-        });
-        return;
-      }
-
-      res.status(400).json({
-        success: false,
-        message: uploadError.message,
-      });
-      return;
-    }
-
-    const message = sanitizeErrorMessage(uploadError, 'Invalid upload request');
-    res.status(400).json({
-      success: false,
-      message,
-    });
-  };
-
-  upload.single('file')(req, res, onUploadComplete);
-};
 
 const router = Router();
 
@@ -75,6 +35,11 @@ router.post(
   // multipart request, so validating before it would reject every upload with a
   // missing assetType. The message keeps the route's exact legacy 400 wording.
   validate({ body: mediaUploadSchema, message: 'assetType must be product, combo, or campaign' }),
+  // Content check (P1.2). Deliberately after `validate`: a request that is wrong
+  // in both ways must keep answering about assetType, which is what this route
+  // has always done. Still before the controller, so nothing reaches ImageKit
+  // without having had its bytes checked.
+  requireImageUpload(),
   (req: Request, res: Response, next: NextFunction) => {
     void mediaController.uploadImage(req, res).catch(next);
   }
@@ -89,13 +54,16 @@ router.delete(
 
 // Review images are temporarily disabled — restore this route to re-enable review image uploads.
 // NOTE: re-import `protect` from '../middleware/auth.middleware' when restoring this route;
-// it is intentionally not imported while the route is disabled.
+// it is intentionally not imported while the route is disabled. `handleSingleUpload` and
+// `requireImageUpload()` are already imported above, and the commented chain below is
+// already complete — uncommenting it is enough.
 // // Review images are uploaded by authenticated customers. The asset type is
 // // forced to "review" server-side; admin image routes stay admin-only.
 // router.post(
 //   '/review-images',
 //   protect as RequestHandler,
 //   handleSingleUpload,
+//   requireImageUpload(),
 //   (req: Request, res: Response, next: NextFunction) => {
 //     void mediaController.uploadReviewImage(req, res).catch(next);
 //   }

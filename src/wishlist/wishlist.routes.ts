@@ -8,6 +8,7 @@ import {
     toggleWishlist,
 } from './wishlist.controller';
 import { addToWishlistSchema } from './wishlist.schemas';
+import { objectIdParam } from '../utils/validation';
 
 const router = Router();
 
@@ -25,9 +26,15 @@ router.post(
     validate({ body: addToWishlistSchema }),
     toggleWishlist as RequestHandler
 );
-// DELETE `/:itemId` is intentionally not body-validated. Its `:itemId` param and
-// `?itemType` query still go through `readItemId` / `normalizeWishlistItemType`;
-// param validation is deferred to the dedicated sweep (see P0-3.5 §3.5).
-router.delete('/:itemId', protect as RequestHandler, removeFromWishlist as RequestHandler);
+// DELETE `/:itemId` carries no body. Its param is an ObjectId and is now refused a
+// layer earlier (P1.6.1, closing the P0-3.5 §3.5 deferral); `?itemType` still goes
+// through `normalizeWishlistItemType` in the handler, and `readItemId` keeps its own
+// check, so the wording 'A valid itemId is required' is unchanged.
+router.delete(
+    '/:itemId',
+    protect as RequestHandler,
+    validate({ params: objectIdParam('itemId'), message: 'A valid itemId is required' }),
+    removeFromWishlist as RequestHandler
+);
 
 export default router;

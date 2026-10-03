@@ -13,15 +13,14 @@ import {
   RateLimitError,
   UnprocessableEntityError,
 } from '@imagekit/nodejs';
-import { ImageKitService, UploadedImageFile, SupportedImageMimeType } from './imagekit.service';
-
-type MulterFile = UploadedImageFile & {
-  fieldname?: string;
-  encoding?: string;
-  destination?: string;
-  filename?: string;
-  path?: string;
-};
+import { ImageKitService } from './imagekit.service';
+import {
+  EMPTY_IMAGE_MESSAGE,
+  MISSING_IMAGE_MESSAGE,
+  UNSUPPORTED_IMAGE_MESSAGE,
+  readImageMimeType,
+  readUploadedFile,
+} from '../middleware/upload-validator.middleware';
 
 const getStatusCode = (error: unknown): number => {
   if (error instanceof BadRequestError) return 400;
@@ -57,12 +56,12 @@ export class ImageKitController {
    */
   async testUpload(req: Request, res: Response): Promise<void> {
     try {
-      const file = (req as Request & { file?: MulterFile }).file;
+      const file = readUploadedFile(req);
 
       if (!file) {
         res.status(400).json({
           success: false,
-          message: 'file is required',
+          message: MISSING_IMAGE_MESSAGE,
         });
         return;
       }
@@ -72,7 +71,7 @@ export class ImageKitController {
       if (actualByteSize <= 0) {
         res.status(400).json({
           success: false,
-          message: 'Invalid or empty upload',
+          message: EMPTY_IMAGE_MESSAGE,
         });
         return;
       }
@@ -85,7 +84,9 @@ export class ImageKitController {
         return;
       }
 
-      const detectedMimeType = this.imageKitService.detectImageMimeType(file.buffer);
+      // Decided by `requireImageUpload()` on the bytes (P1.2). `undefined` means
+      // the guard did not run, which is a refusal — never an unchecked upload.
+      const detectedMimeType = readImageMimeType(req);
 
       if (process.env.NODE_ENV !== 'production') {
         console.log('[ImageKit test upload] file metadata:', {
@@ -96,18 +97,15 @@ export class ImageKitController {
         });
       }
 
-      if (!detectedMimeType) {
+      if (detectedMimeType === undefined) {
         res.status(400).json({
           success: false,
-          message: 'Only JPEG, PNG, WebP, and GIF images are allowed',
+          message: UNSUPPORTED_IMAGE_MESSAGE,
         });
         return;
       }
 
-      const uploaded = await this.imageKitService.uploadTestImage(
-        file,
-        detectedMimeType as SupportedImageMimeType
-      );
+      const uploaded = await this.imageKitService.uploadTestImage(file, detectedMimeType);
 
       res.status(201).json({
         success: true,
