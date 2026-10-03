@@ -76,6 +76,13 @@ jobs:
       - name: Type-check api (Vercel entrypoint)
         run: npm run verify:api-types
 
+      # P1.7c. An installed-but-unimported package is not a vulnerability, it is a
+      # claim — which is why `passport`/`rxjs` survived three blocks and two audits.
+      # This asserts every declared dependency is referenced somewhere (or is on a
+      # short, reasoned allowlist), and that the allowlist has not gone stale.
+      - name: Verify no unused dependencies
+        run: npm run verify:unused-deps
+
       - name: Verify validation layer
         run: npm run verify:validation
 
