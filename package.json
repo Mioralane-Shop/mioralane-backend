@@ -30,7 +30,7 @@
     "verify:turnstile": "tsx tests/verify-turnstile.ts"
   },
   "dependencies": {
-    "@imagekit/nodejs": "^7.11.0",
+    "@imagekit/nodejs": "^7.12.1",
     "bcryptjs": "^3.0.3",
     "cookie-parser": "^1.4.7",
     "cors": "^2.8.6",
