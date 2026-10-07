@@ -26,7 +26,8 @@
     "verify:url-safety": "tsx tests/verify-url-safety.ts",
     "verify:env-validation": "tsx tests/verify-env-validation.ts",
     "verify:params-validation": "tsx tests/verify-params-validation.ts",
-    "verify:coupon-cancel": "tsx tests/verify-coupon-cancel.ts"
+    "verify:coupon-cancel": "tsx tests/verify-coupon-cancel.ts",
+    "verify:turnstile": "tsx tests/verify-turnstile.ts"
   },
   "dependencies": {
     "@imagekit/nodejs": "^7.11.0",

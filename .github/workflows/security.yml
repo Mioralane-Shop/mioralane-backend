@@ -144,3 +144,10 @@ jobs:
       # integration layer, not this step.
       - name: Verify coupon release on cancel
         run: npm run verify:coupon-cancel
+
+      # Turnstile. The service (fetch stubbed, so nothing leaves the runner), the
+      # schema, the live route (400 on a bad payload, 200 { success } on a good
+      # one, the disabled short-circuit), the dedicated rate limit, and the
+      # negative control that shows the schema is what produces the 400.
+      - name: Verify Turnstile verification
+        run: npm run verify:turnstile
