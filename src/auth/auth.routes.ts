@@ -4,25 +4,34 @@ import { googleLoginSchema, loginUserSchema, registerUserSchema } from './auth.s
 import { validate } from '../middleware/validate.middleware';
 import { protect, AuthenticatedRequest } from '../middleware/auth.middleware';
 import { createCsrfToken, readSessionToken } from '../middleware/csrf-token.middleware';
+import { requireTurnstile } from '../turnstile/turnstile.middleware';
 import { UserModel } from './user.model';
 
 const router = Router();
 
 // Messages are overridden per route so every existing 400 keeps its exact
 // wording. Status codes and the response envelope are unchanged.
+//
+// `requireTurnstile` is mounted immediately before each handler — after
+// `validate`, so a malformed body is still answered by the schema (see the
+// middleware's ordering note). These three routes are the credential-entry
+// points, which is what it exists to protect.
 router.post(
   '/register',
   validate({ body: registerUserSchema, message: 'Username, email, and password are required' }),
+  requireTurnstile,
   registerUser
 );
 router.post(
   '/login',
   validate({ body: loginUserSchema, message: 'Username or email and password are required' }),
+  requireTurnstile,
   loginUser
 );
 router.post(
   '/google',
   validate({ body: googleLoginSchema, message: 'Google credential is required' }),
+  requireTurnstile,
   googleLogin
 );
 router.post('/logout', logoutUser);

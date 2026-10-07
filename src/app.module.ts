@@ -38,6 +38,7 @@ import {
 } from './middleware/rateLimiter.middleware';
 import { csrfOriginGuard } from './middleware/csrf.middleware';
 import { CSRF_HEADER, csrfTokenGuard } from './middleware/csrf-token.middleware';
+import { TURNSTILE_TOKEN_HEADER } from './turnstile/turnstile.middleware';
 import { stripMongoOperators } from './middleware/strip-mongo-operators.middleware';
 import {
   CorsOriginDeniedError,
@@ -135,11 +136,12 @@ const createApp = (options: CreateAppOptions = {}): express.Application => {
       },
       credentials: true,
       methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-      // `CSRF_HEADER` must be here or the browser's preflight refuses every
-      // state-changing request before it is even sent — a failure that looks
-      // nothing like a CSRF error. Imported rather than spelled out so the
-      // browser contract cannot drift from the header the guard reads.
-      allowedHeaders: ['Content-Type', 'Authorization', CSRF_HEADER],
+      // `CSRF_HEADER` and `TURNSTILE_TOKEN_HEADER` must be here or the browser's
+      // preflight refuses every state-changing request before it is even sent —
+      // a failure that looks nothing like a CSRF or Turnstile error. Both are
+      // imported rather than spelled out so the browser contract cannot drift
+      // from the headers the guards read.
+      allowedHeaders: ['Content-Type', 'Authorization', CSRF_HEADER, TURNSTILE_TOKEN_HEADER],
       // Let the browser reuse a preflight result for a day instead of sending
       // one before every write. Without this, a preflight per request would
       // double the traffic the write limiter does not charge for.
