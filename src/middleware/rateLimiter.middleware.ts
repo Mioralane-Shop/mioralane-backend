@@ -127,6 +127,32 @@ export const authLimiter = rateLimit({
     },
 });
 
+/** Turnstile tier: 20 requests / minute / IP. */
+export const TURNSTILE_LIMIT = {
+    windowMs: 1 * 60 * 1000,
+    limit: 20,
+} as const;
+
+/**
+ * Dedicated limiter for `POST /api/verify-turnstile`.
+ *
+ * Separate from {@link authLimiter} on purpose. `authLimiter` is ONE bucket
+ * shared by every `/api/auth/*` request, so mounting it here would let a burst
+ * of verification calls lock out logins (and the reverse). This endpoint is
+ * public and pre-session; it gets its own small ceiling. Like the other two it
+ * sets no `keyGenerator`, so express-rate-limit v8 keeps IPv6 normalisation.
+ */
+export const turnstileLimiter = rateLimit({
+    windowMs: TURNSTILE_LIMIT.windowMs,
+    limit: TURNSTILE_LIMIT.limit,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: {
+        success: false,
+        message: 'Too many requests — please try again in a minute',
+    },
+});
+
 /**
  * Broad flood control, mounted on every route.
  *

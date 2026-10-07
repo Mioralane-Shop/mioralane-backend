@@ -34,6 +34,7 @@ import {
   createGlobalLimiter,
   createWriteLimiter,
   readRateLimitSettings,
+  turnstileLimiter,
 } from './middleware/rateLimiter.middleware';
 import { csrfOriginGuard } from './middleware/csrf.middleware';
 import { CSRF_HEADER, csrfTokenGuard } from './middleware/csrf-token.middleware';
@@ -50,6 +51,7 @@ import {
   createApiDocsHandlers,
   handleOpenApiJson,
 } from './swagger';
+import { turnstileRoutes } from './turnstile/turnstile.routes';
 
 /**
  * Options for {@link createApp}.
@@ -262,6 +264,11 @@ const createApp = (options: CreateAppOptions = {}): express.Application => {
 
   // Review moderation (admin only)
   app.use('/api/admin/reviews', adminReviewRoutes);
+
+  // Cloudflare Turnstile verification (public) — rate-limited bot protection for
+  // the login/register/checkout flows. Public on purpose: it is reached before a
+  // caller holds any session, and it stores nothing of its own.
+  app.use('/api/verify-turnstile', turnstileLimiter, turnstileRoutes);
 
   // Real reusable media upload/delete routes for product and combo assets
   app.use('/api/media', mediaRoutes);
