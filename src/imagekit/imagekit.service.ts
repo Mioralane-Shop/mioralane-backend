@@ -17,10 +17,19 @@ export interface ImageKitConfig {
 
 const TEST_FOLDER = '/mioralane/test';
 const DEFAULT_FILENAME_PREFIX = 'mioralane-test';
-const MEDIA_FOLDER_BY_TYPE: Record<MediaAssetType, string> = {
+/**
+ * The ImageKit destination folder per asset type.
+ *
+ * Exported because `media/media.utils.ts` used to carry a second, identical copy
+ * (removed 2026-10-10) — nothing kept the two in step, and only the fact that both
+ * were exhaustive `Record<MediaAssetType, string>`s made a divergence a compile
+ * error rather than a silent one-folder-vs-another bug.
+ */
+export const MEDIA_FOLDER_BY_TYPE: Record<MediaAssetType, string> = {
   product: '/mioralane/products',
   combo: '/mioralane/combos',
   campaign: '/mioralane/campaigns',
+  'brand-logo': '/mioralane/brand-logos',
   // Review images are temporarily disabled.
   // review: '/mioralane/reviews',
 };
@@ -28,6 +37,7 @@ const MEDIA_FILENAME_PREFIX_BY_TYPE: Record<MediaAssetType, string> = {
   product: 'mioralane-product',
   combo: 'mioralane-combo',
   campaign: 'mioralane-campaign',
+  'brand-logo': 'mioralane-brand-logo',
   // Review images are temporarily disabled.
   // review: 'mioralane-review',
 };

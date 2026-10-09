@@ -48,10 +48,16 @@ import {
     MAX_MEDIA_UPLOAD_SIZE_BYTES,
     MEDIA_IMAGE_MIME_ALLOWLIST,
     MIME_TO_EXTENSION,
+    BRAND_LOGO_MIME_ALLOWLIST,
+    BRAND_LOGO_MIME_TO_EXTENSION,
+    SVG_SANITIZE_REJECTION_MESSAGE,
     buildImageFileName,
+    detectBrandLogoMimeType,
     detectImageMimeType,
     isAllowedImageMimeType,
+    isAllowedImageMimeTypeForAssetType,
     sanitizeImageBaseName,
+    sanitizeSvgContent,
 } from '../src/media/image-upload-policy';
 
 const SRC_DIR = join(__dirname, '..', 'src');
@@ -871,9 +877,102 @@ const main = async (): Promise<void> => {
     check(
         'the dead MIME_TYPE_TO_EXTENSION map (which listed .svg) is gone',
         !/MIME_TYPE_TO_EXTENSION/.test(imagekitService) &&
-            !/\.svg/.test(policySource) &&
+            // The GLOBAL map stays SVG-free. (Until 2026-10-10 this asserted the
+            // policy file contained no `.svg` substring at all; brand-logo SVG
+            // support made that too broad, so the invariant is now stated about
+            // the map itself — the same guarantee, one level more precise.)
+            !Object.values(MIME_TO_EXTENSION).some((ext) => /\.svg$/i.test(ext)) &&
             !/\.svg/.test(imagekitService),
-        'a .svg extension mapping survives'
+        'a .svg extension mapping survives in the global map'
+    );
+
+    /* ── Brand-logo SVG: the one asset type allowed to store SVG ─────── */
+    section('Brand-logo uploads: SVG, scoped and content-checked');
+
+    const CLEAN_SVG_BYTES = Buffer.from(
+        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M2 2h20v20H2z"/></svg>',
+        'utf8'
+    );
+    const SVG_WITH_EVENT_HANDLER = Buffer.from(
+        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" onload="alert(1)"><path d="M2 2h20v20H2z"/></svg>',
+        'utf8'
+    );
+    const SVG_WITH_FOREIGN_OBJECT = Buffer.from(
+        '<svg xmlns="http://www.w3.org/2000/svg"><foreignObject><body xmlns="http://www.w3.org/1999/xhtml"/></foreignObject></svg>',
+        'utf8'
+    );
+    const SVG_WITH_JS_URL = Buffer.from(
+        '<svg xmlns="http://www.w3.org/2000/svg"><a href="javascript:alert(1)"><path d="M2 2h20v20H2z"/></a></svg>',
+        'utf8'
+    );
+
+    check(
+        'the brand-logo allowlist is the global three plus SVG',
+        BRAND_LOGO_MIME_ALLOWLIST.length === MEDIA_IMAGE_MIME_ALLOWLIST.length + 1 &&
+            BRAND_LOGO_MIME_ALLOWLIST.includes('image/svg+xml') &&
+            MEDIA_IMAGE_MIME_ALLOWLIST.every((mime) => BRAND_LOGO_MIME_ALLOWLIST.includes(mime)),
+        BRAND_LOGO_MIME_ALLOWLIST.join(', ')
+    );
+    check(
+        'the global allowlist is UNCHANGED — SVG did not leak into it',
+        MEDIA_IMAGE_MIME_ALLOWLIST.length === 3 &&
+            !(MEDIA_IMAGE_MIME_ALLOWLIST as readonly string[]).includes('image/svg+xml') &&
+            !(Object.values(MIME_TO_EXTENSION) as string[]).includes('.svg'),
+        MEDIA_IMAGE_MIME_ALLOWLIST.join(', ')
+    );
+    check(
+        'the brand-logo extension map adds exactly one member, and it is .svg',
+        Object.keys(BRAND_LOGO_MIME_TO_EXTENSION).length === BRAND_LOGO_MIME_ALLOWLIST.length &&
+            BRAND_LOGO_MIME_TO_EXTENSION['image/svg+xml'] === '.svg',
+        Object.entries(BRAND_LOGO_MIME_TO_EXTENSION).map(([m, e]) => `${m}=${e}`).join(', ')
+    );
+    check(
+        'the asset-type-aware predicate is the ONLY place the two lists meet',
+        isAllowedImageMimeTypeForAssetType('image/svg+xml', 'brand-logo') &&
+            !isAllowedImageMimeTypeForAssetType('image/svg+xml', 'product') &&
+            !isAllowedImageMimeTypeForAssetType('image/svg+xml', 'combo') &&
+            !isAllowedImageMimeTypeForAssetType('image/svg+xml', 'campaign') &&
+            isAllowedImageMimeTypeForAssetType('image/png', 'brand-logo') &&
+            isAllowedImageMimeTypeForAssetType('image/png', 'product'),
+        'an SVG must be reachable only through brand-logo'
+    );
+    check(
+        'the brand-logo sniffer detects an SVG the raster sniffer refuses',
+        detectBrandLogoMimeType(CLEAN_SVG_BYTES) === 'image/svg+xml' &&
+            detectImageMimeType(CLEAN_SVG_BYTES) === null &&
+            detectBrandLogoMimeType(PNG_BYTES) === 'image/png' &&
+            detectBrandLogoMimeType(TEXT_BYTES) === null,
+        'a brand-logo sniffer that accepts non-SVG text would store junk'
+    );
+    check(
+        'the SVG prolog an exporter writes is tolerated',
+        detectBrandLogoMimeType(
+            Buffer.from('<?xml version="1.0"?>\n<!-- exported -->\n<svg xmlns="http://www.w3.org/2000/svg"/>', 'utf8')
+        ) === 'image/svg+xml',
+        'Illustrator writes an XML declaration and a comment'
+    );
+
+    check(
+        'POSITIVE CONTROL: a clean SVG passes sanitizeSvgContent',
+        sanitizeSvgContent(CLEAN_SVG_BYTES),
+        'a clean export must not be refused'
+    );
+    for (const [label, bytes] of [
+        ['<script>', SVG_BYTES],
+        ['an on*= handler', SVG_WITH_EVENT_HANDLER],
+        ['<foreignObject>', SVG_WITH_FOREIGN_OBJECT],
+        ['a javascript: URL', SVG_WITH_JS_URL],
+    ] as const) {
+        check(
+            `NEGATIVE CONTROL: sanitizeSvgContent refuses an SVG containing ${label}`,
+            !sanitizeSvgContent(bytes),
+            'this is the stored-XSS vector the check exists for'
+        );
+    }
+    check(
+        'the rejection message is the agreed one',
+        SVG_SANITIZE_REJECTION_MESSAGE === 'SVG contains scripts or event handlers',
+        SVG_SANITIZE_REJECTION_MESSAGE
     );
 
     check(

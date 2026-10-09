@@ -1,7 +1,11 @@
 export type MediaAssetProvider = 'imagekit';
 // Review images are temporarily disabled — restore 'review' to re-enable review images.
 // export type MediaAssetType = 'product' | 'combo' | 'campaign' | 'review';
-export type MediaAssetType = 'product' | 'combo' | 'campaign';
+//
+// `brand-logo` is the only member allowed to store SVG (a vector wordmark); see
+// the brand-logo block in `image-upload-policy.ts` for the content check that
+// comes with it.
+export type MediaAssetType = 'product' | 'combo' | 'campaign' | 'brand-logo';
 
 export interface MediaAsset {
   provider: MediaAssetProvider;

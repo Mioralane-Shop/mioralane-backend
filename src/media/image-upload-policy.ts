@@ -1,5 +1,6 @@
 import crypto from 'crypto';
 import path from 'path';
+import type { MediaAssetType } from './media.types';
 
 /**
  * The image upload policy, in one place (P1.2).
@@ -148,4 +149,106 @@ export const buildImageFileName = (
   const uniqueSuffix = `${Date.now()}-${crypto.randomUUID()}`;
 
   return `${prefix}-${safeBaseName}-${uniqueSuffix}${extension}`;
+};
+
+/**
+ * ── Brand logos: the ONE asset type that may store SVG ────────────────────────
+ *
+ * A brand logo is a vector wordmark — the six in `mioralane-frontend/public/brands`
+ * are SVGs — so rasterising them would be a visible quality regression.
+ * `brand-logo` is therefore the only asset type allowed to store `image/svg+xml`.
+ *
+ * The global allowlist above is deliberately NOT widened, and neither are
+ * `SupportedImageMimeType` / `MIME_TO_EXTENSION` (which the whole upload pipeline
+ * is typed against): `tests/verify-file-upload.ts` asserts the
+ * product/combo/campaign allowlist is exactly JPEG, PNG and WebP, and an SVG sent
+ * as a product is still refused. Everything brand-logo-specific lives in this
+ * block, so the answer is a function of `assetType` rather than a loosened rule.
+ *
+ * ## Why SVG also needs a content check
+ *
+ * Inside `<img src>` an SVG is a static image — browsers do not run its scripts.
+ * The stored file is also reachable by **direct navigation**, and a top-level SVG
+ * document *does* execute its scripts, so an uploaded logo would be stored XSS on
+ * our own CDN origin. Refusing script-bearing markup costs nothing legitimate
+ * (Illustrator and Figma exports contain none), so this refuses rather than tries
+ * to sanitise. `AssetType` is threaded in as a type-only import: this module stays
+ * runtime-dependency-free, as its header promises.
+ */
+export type BrandLogoMimeType = SupportedImageMimeType | 'image/svg+xml';
+
+/** `brand-logo` accepts the global three plus SVG. */
+export const BRAND_LOGO_MIME_ALLOWLIST: readonly BrandLogoMimeType[] = [
+  ...MEDIA_IMAGE_MIME_ALLOWLIST,
+  'image/svg+xml',
+];
+
+/** Extension per format, for brand logos only. Separated so `MIME_TO_EXTENSION` stays SVG-free. */
+export const BRAND_LOGO_MIME_TO_EXTENSION: Record<BrandLogoMimeType, string> = {
+  ...MIME_TO_EXTENSION,
+  'image/svg+xml': '.svg',
+};
+
+/**
+ * An SVG document's root element, allowing the optional prolog an exporter writes
+ * before it (BOM, XML declaration, comments, doctype). Matched against the first
+ * few hundred bytes, which is all a signature sniff needs.
+ */
+const SVG_ROOT_ELEMENT = /^(?:\uFEFF)?\s*(?:<\?xml[\s\S]*?\?>\s*)?(?:<!--[\s\S]*?-->\s*)*(?:<!doctype[^>]*>\s*)?<svg[\s>]/i;
+
+/** Markup that must never be stored, however it is later rendered. */
+const SVG_FORBIDDEN_PATTERNS: readonly RegExp[] = [
+  /<script/i,
+  /<foreignobject/i,
+  /on\w+\s*=/i,
+  /javascript:/i,
+];
+
+/** The single message the controller returns for a refused SVG body. */
+export const SVG_SANITIZE_REJECTION_MESSAGE = 'SVG contains scripts or event handlers';
+
+/**
+ * `true` when the SVG body is free of scripts and event handlers.
+ *
+ * A rejection, not a rewrite: editing markup to remove a vector is how a
+ * sanitiser gets bypassed, and there is no legitimate export to preserve.
+ */
+export const sanitizeSvgContent = (bytes: Buffer): boolean => {
+  const source = bytes.toString('utf8');
+
+  return !SVG_FORBIDDEN_PATTERNS.some((pattern) => pattern.test(source));
+};
+
+/**
+ * Brand-logo sniffer: the raster signatures first, then SVG.
+ *
+ * Deliberately a separate function rather than a widening of
+ * `detectImageMimeType`, so a product upload cannot accidentally reach the SVG
+ * branch.
+ */
+export const detectBrandLogoMimeType = (buffer: Buffer): BrandLogoMimeType | null => {
+  const raster = detectImageMimeType(buffer);
+
+  if (raster) {
+    return raster;
+  }
+
+  // latin1 so a stray high byte can neither throw nor mis-align the match.
+  return SVG_ROOT_ELEMENT.test(buffer.toString('latin1', 0, 512)) ? 'image/svg+xml' : null;
+};
+
+/** MIME allowlist as a function of the asset type — the middleware's decision. */
+export const isAllowedImageMimeTypeForAssetType = (
+  value: unknown,
+  assetType: MediaAssetType
+): value is BrandLogoMimeType => {
+  if (typeof value !== 'string') {
+    return false;
+  }
+
+  return (
+    assetType === 'brand-logo'
+      ? (BRAND_LOGO_MIME_ALLOWLIST as readonly string[]).includes(value)
+      : (MEDIA_IMAGE_MIME_ALLOWLIST as readonly string[]).includes(value)
+  );
 };
