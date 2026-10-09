@@ -34,7 +34,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       # Node 24 — the LTS line, and the same major local development runs (v24.9.0),
       # so CI and a developer's machine agree. This previously targeted 20, which
