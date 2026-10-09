@@ -27,6 +27,7 @@ import {
   announcementPublicRoutes,
 } from './announcement/announcement.routes';
 import { adminMegaMenuRoutes, megaMenuPublicRoutes } from './mega-menu/mega-menu.routes';
+import { adminBrandRoutes, brandPublicRoutes } from './brand/brand.routes';
 import reviewRoutes from './review/review.routes';
 import adminReviewRoutes from './review/admin-review.routes';
 import helmet from 'helmet';
@@ -258,6 +259,10 @@ const createApp = (options: CreateAppOptions = {}): express.Application => {
   // Storefront "Shop" mega menu (desktop navbar panel) — curation-only singleton
   app.use('/api/admin/mega-menu', adminMegaMenuRoutes);
   app.use('/api/mega-menu', megaMenuPublicRoutes);
+
+  // Storefront brands — CRUD, one document per brand, curated from the admin app
+  app.use('/api/admin/brands', adminBrandRoutes);
+  app.use('/api/brands', brandPublicRoutes);
   app.use('/api/shipping', shippingRoutes);
 
   // Wishlist routes (authenticated user flow)

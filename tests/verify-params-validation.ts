@@ -107,6 +107,10 @@ const PARAM_ROUTES: readonly ParamRoute[] = [
     { file: 'activity-log/activity-log.routes.ts', method: 'get', path: '/admin/:id', param: 'id', message: 'A valid activity id is required' },
     { file: 'activity-log/activity-log.routes.ts', method: 'get', path: '/participants/:id', param: 'id', message: 'A valid activity id is required' },
 
+    { file: 'brand/brand.routes.ts', method: 'get', path: '/:id', param: 'id', message: 'Invalid brand ID' },
+    { file: 'brand/brand.routes.ts', method: 'patch', path: '/:id', param: 'id', message: 'Invalid brand ID' },
+    { file: 'brand/brand.routes.ts', method: 'delete', path: '/:id', param: 'id', message: 'Invalid brand ID' },
+
     { file: 'customer/admin-customer.routes.ts', method: 'get', path: '/:id', param: 'id', message: 'Invalid customer ID' },
 
     { file: 'inventory/inventory.routes.ts', method: 'get', path: '/transactions/:id', param: 'id', message: 'A valid transactionId is required' },
@@ -397,6 +401,7 @@ const main = async (): Promise<void> => {
         { wording: 'Invalid address ID', handlerFile: 'address/address.service.ts' },
         { wording: 'A valid activity id is required', handlerFile: 'activity-log/activity-log.service.ts' },
         { wording: 'Invalid customer ID', handlerFile: 'customer/admin-customer.controller.ts' },
+        { wording: 'Invalid brand ID', handlerFile: 'brand/brand.controller.ts' },
         { wording: 'A valid transactionId is required', handlerFile: 'inventory/inventory-transaction.service.ts', builtFromLabel: true },
         { wording: 'A valid itemId is required', handlerFile: 'inventory/inventory-transaction.service.ts', builtFromLabel: true },        { wording: 'Invalid order ID', handlerFile: 'order/admin-order.controller.ts' },
         { wording: 'Invalid order ID', handlerFile: 'order/order.controller.ts' },
