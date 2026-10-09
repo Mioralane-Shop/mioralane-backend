@@ -27,6 +27,7 @@
     "verify:env-validation": "tsx tests/verify-env-validation.ts",
     "verify:params-validation": "tsx tests/verify-params-validation.ts",
     "verify:product-filters": "tsx tests/verify-product-filters.ts",
+    "verify:brand": "tsx tests/verify-brand.ts",
     "verify:coupon-cancel": "tsx tests/verify-coupon-cancel.ts",
     "verify:turnstile": "tsx tests/verify-turnstile.ts"
   },
