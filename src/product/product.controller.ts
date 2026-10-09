@@ -53,6 +53,8 @@ interface ProductQueryParams {
   skinType?: string;
   skinConcern?: string;
   concern?: string;
+  /** Matches the full ingredient list or any key-ingredient name. */
+  ingredient?: string;
   search?: string;
   sort?: string;
   featured?: string;
@@ -340,6 +342,33 @@ const buildExactMatchCondition = (
     [field]: {
       $in: uniqueValues.map((value) => new RegExp(`^${escapeRegex(value)}$`, 'i')),
     },
+  };
+};
+
+/**
+ * Substring match against the free-text ingredient list and against each
+ * key-ingredient name. A product carries `ingredients` as a paragraph and
+ * `keyIngredients` as `{name, benefit}` rows, so both are checked. `$in` with
+ * RegExp values matches any of the supplied terms (OR), mirroring how
+ * brand/category treat a comma-separated list.
+ *
+ * Exported so `tests/verify-product-filters.ts` can assert the built condition
+ * directly: the endpoint cannot be exercised without a database.
+ */
+export const buildIngredientCondition = (values: string[]): Record<string, unknown> | null => {
+  const uniqueValues = Array.from(new Set(values.map((value) => value.trim()).filter(Boolean)));
+
+  if (uniqueValues.length === 0) {
+    return null;
+  }
+
+  const patterns = uniqueValues.map((value) => new RegExp(escapeRegex(value), 'i'));
+
+  return {
+    $or: [
+      { ingredients: { $in: patterns } },
+      { 'keyIngredients.name': { $in: patterns } },
+    ],
   };
 };
 
@@ -1024,7 +1053,7 @@ export const getCartRecommendations = async (req: Request, res: Response): Promi
  *   get:
  *     tags: [Products]
  *     summary: Get paginated list of products
- *     description: Query products with optional filters — tab, brand, category, skinType, skinConcern, search.
+ *     description: Query products with optional filters — tab, brand, category, skinType, skinConcern, ingredient, search.
  *     parameters:
  *       - in: query
  *         name: tab
@@ -1052,6 +1081,11 @@ export const getCartRecommendations = async (req: Request, res: Response): Promi
  *         schema:
  *           type: string
  *         description: Filter by skin concern (e.g. Acne)
+ *       - in: query
+ *         name: ingredient
+ *         schema:
+ *           type: string
+ *         description: Comma-separated ingredients — matches the ingredient list or any key-ingredient name (e.g. Snail Mucin)
  *       - in: query
  *         name: search
  *         schema:
@@ -1102,6 +1136,7 @@ export const getProducts = async (req: Request, res: Response): Promise<void> =>
       skinType,
       skinConcern,
       concern,
+      ingredient,
       search,
       sort,
       featured,
@@ -1149,6 +1184,9 @@ export const getProducts = async (req: Request, res: Response): Promise<void> =>
     const concernValues = [...splitCsv(skinConcern), ...splitCsv(concern)];
     const concernCondition = buildExactMatchCondition('skinConcern', concernValues);
     if (concernCondition) andConditions.push(concernCondition);
+
+    const ingredientCondition = buildIngredientCondition(splitCsv(ingredient));
+    if (ingredientCondition) andConditions.push(ingredientCondition);
 
     const searchCondition = buildSearchCondition(search);
     if (searchCondition) andConditions.push(searchCondition);
