@@ -19,6 +19,7 @@
     "verify:security-headers": "tsx tests/verify-security-headers.ts",
     "verify:csrf": "tsx tests/verify-csrf-token.ts",
     "seed:combos": "tsx src/scripts/seed-combos.ts",
+    "seed:brands": "tsx src/scripts/seed-brands.ts",
     "migrate:wishlist": "tsx src/scripts/migrate-user-wishlist.ts",
     "migrate:wishlist-items": "tsx src/scripts/migrate-wishlist-items.ts",
     "verify:file-upload": "tsx tests/verify-file-upload.ts",
