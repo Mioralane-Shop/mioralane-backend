@@ -33,8 +33,11 @@ router.post(
   handleSingleUpload,
   // MUST stay after handleSingleUpload: multer is what populates req.body for a
   // multipart request, so validating before it would reject every upload with a
-  // missing assetType. The message keeps the route's exact legacy 400 wording.
-  validate({ body: mediaUploadSchema, message: 'assetType must be product, combo, or campaign' }),
+  // missing assetType. The message names every asset type the schema accepts:
+  // `brand-logo` was added to `MEDIA_ASSET_TYPES` after this sentence was first
+  // written, and a rejection that omitted it told the caller a value it had just
+  // been allowed to send was invalid.
+  validate({ body: mediaUploadSchema, message: 'assetType must be product, combo, campaign, or brand-logo' }),
   // Content check (P1.2). Deliberately after `validate`: a request that is wrong
   // in both ways must keep answering about assetType, which is what this route
   // has always done. Still before the controller, so nothing reaches ImageKit

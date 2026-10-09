@@ -163,7 +163,7 @@ const paramsSchema = z.object({
 const AUTH_MESSAGE_OVERRIDE = 'Username, email, and password are required';
 
 /** The exact 400 wording `media.routes.ts` pins on the upload route. */
-const MEDIA_ASSET_TYPE_MESSAGE = 'assetType must be product, combo, or campaign';
+const MEDIA_ASSET_TYPE_MESSAGE = 'assetType must be product, combo, campaign, or brand-logo';
 
 /** The exact 400 wordings the auth routes must keep (see auth.routes.ts). */
 const AUTH_REGISTER_MESSAGE = 'Username, email, and password are required';

@@ -321,7 +321,7 @@ const buildMediaRouteProbeApp = (): express.Application => {
         }),
         // The same order as `media.routes.ts`, including the schema that rejects a
         // missing or unknown `assetType` before the guard ever sees the request.
-        validate({ body: mediaUploadSchema, message: 'assetType must be product, combo, or campaign' }),
+        validate({ body: mediaUploadSchema, message: 'assetType must be product, combo, campaign, or brand-logo' }),
         requireImageUpload(),
         (req: Request, res: Response, next: NextFunction) => {
             void mediaController.uploadImage(req, res).catch(next);
