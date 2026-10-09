@@ -136,6 +136,26 @@ jobs:
       - name: Verify params validation
         run: npm run verify:params-validation
 
+      # The `ingredient` query filter on the product list: the condition builder
+      # over its inputs (a blank or empty value produces no filter rather than an
+      # `$in: []` that matches nothing, both ingredient shapes are ORed, terms are
+      # escaped), plus the wiring, plus the assertion that the list route runs no
+      # query schema — the one silent failure mode, because a schema that omitted
+      # the parameter would strip it and the endpoint would answer 200 with every
+      # product rather than erroring.
+      - name: Verify product filters
+        run: npm run verify:product-filters
+
+      # The brand module: the route surface and the registration order that makes
+      # `/reorder` reachable at all, the guards, the request schemas as pure
+      # functions (`safeUrlSchema` on `logoUrl`, server-owned keys stripped, a
+      # cleared dimension absent rather than 0), the serializers, and the two
+      # storefront filters read from source — no database is available on the
+      # runner to exercise them, so the query that decides what the marquee shows
+      # is asserted where it is built, next to the reason `$exists` is required.
+      - name: Verify brand module
+        run: npm run verify:brand
+
       # P1.6-followup-a. The coupon release on cancellation: the two guards that
       # keep a counter from going negative, the delete-first ordering that makes
       # the release idempotent, the no-op cases driven through the real function,
