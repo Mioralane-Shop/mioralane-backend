@@ -36,7 +36,10 @@ Backend API for the **Mioralane** skincare e-commerce project.
    cp .env.example .env
    ```
 
-   Then fill in your MongoDB connection string and a strong `JWT_SECRET`.
+   Then fill in your MongoDB connection string, a strong `JWT_SECRET`
+   (`openssl rand -base64 48`), and the three ImageKit values. `GOOGLE_CLIENT_ID`
+   is only needed for Google sign-in. `.env.example` documents every variable and
+   where it is read.
 
 3. Start the development server:
 
@@ -44,7 +47,8 @@ Backend API for the **Mioralane** skincare e-commerce project.
    npm run start:dev
    ```
 
-The API will be available at `http://localhost:3000`.
+The API will be available at `http://localhost:5000` — the port `.env.example`
+sets, and the one both front ends expect.
 
 ## Scripts
 
