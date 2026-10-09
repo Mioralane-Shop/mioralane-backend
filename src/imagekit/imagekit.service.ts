@@ -1,6 +1,6 @@
 import ImageKit, { toFile } from '@imagekit/nodejs';
 import type { MediaAssetType, MediaUploadResponseData } from '../media/media.types';
-import { buildImageFileName, type SupportedImageMimeType } from '../media/image-upload-policy';
+import { buildImageFileName, type BrandLogoMimeType } from '../media/image-upload-policy';
 
 export interface UploadedImageFile {
   buffer: Buffer;
@@ -86,12 +86,16 @@ export class ImageKitService {
     });
   }
 
-  buildTestFileName(originalname: string, mimeType: SupportedImageMimeType): string {
-    return buildImageFileName(DEFAULT_FILENAME_PREFIX, originalname, mimeType);
+  buildTestFileName(originalname: string, mimeType: BrandLogoMimeType): string {
+    // Synthetic asset type. The dev-only test route has no `assetType` field of
+    // its own, but a client may still send `assetType=brand-logo` as a multipart
+    // part, so this path can carry an SVG; `extensionForAssetType` resolves the
+    // extension for raster types identically either way.
+    return buildImageFileName(DEFAULT_FILENAME_PREFIX, originalname, mimeType, 'product');
   }
 
-  buildMediaFileName(assetType: MediaAssetType, originalname: string, mimeType: SupportedImageMimeType): string {
-    return buildImageFileName(MEDIA_FILENAME_PREFIX_BY_TYPE[assetType], originalname, mimeType);
+  buildMediaFileName(assetType: MediaAssetType, originalname: string, mimeType: BrandLogoMimeType): string {
+    return buildImageFileName(MEDIA_FILENAME_PREFIX_BY_TYPE[assetType], originalname, mimeType, assetType);
   }
 
   buildMediaFolder(assetType: MediaAssetType): string {
@@ -101,7 +105,7 @@ export class ImageKitService {
   private mapUploadResponse(
     uploaded: ImageKit.FileUploadResponse,
     assetType: MediaAssetType,
-    mimeType: SupportedImageMimeType
+    mimeType: BrandLogoMimeType
   ): MediaUploadResponseData {
     return {
       provider: 'imagekit',
@@ -120,12 +124,12 @@ export class ImageKitService {
 
   private async uploadImageAsset(
     file: UploadedImageFile,
-    detectedMimeType: SupportedImageMimeType,
+    detectedMimeType: BrandLogoMimeType,
     assetType: MediaAssetType,
     fileNamePrefix: string,
     folder: string
   ): Promise<MediaUploadResponseData> {
-    const fileName = buildImageFileName(fileNamePrefix, file.originalname, detectedMimeType);
+    const fileName = buildImageFileName(fileNamePrefix, file.originalname, detectedMimeType, assetType);
     const uploadable = await toFile(file.buffer, fileName, {
       type: detectedMimeType,
     });
@@ -142,7 +146,7 @@ export class ImageKitService {
 
   async uploadTestImage(
     file: UploadedImageFile,
-    detectedMimeType: SupportedImageMimeType
+    detectedMimeType: BrandLogoMimeType
   ): Promise<ImageKit.FileUploadResponse> {
     const fileName = this.buildTestFileName(file.originalname, detectedMimeType);
     const uploadable = await toFile(file.buffer, fileName, {
@@ -159,7 +163,7 @@ export class ImageKitService {
 
   async uploadMediaImage(
     file: UploadedImageFile,
-    detectedMimeType: SupportedImageMimeType,
+    detectedMimeType: BrandLogoMimeType,
     assetType: MediaAssetType
   ): Promise<MediaUploadResponseData> {
     return this.uploadImageAsset(

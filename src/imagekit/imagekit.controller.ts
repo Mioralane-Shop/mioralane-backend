@@ -21,6 +21,7 @@ import {
   readImageMimeType,
   readUploadedFile,
 } from '../middleware/upload-validator.middleware';
+import { SVG_SANITIZE_REJECTION_MESSAGE, sanitizeSvgContent } from '../media/image-upload-policy';
 
 const getStatusCode = (error: unknown): number => {
   if (error instanceof BadRequestError) return 400;
@@ -101,6 +102,19 @@ export class ImageKitController {
         res.status(400).json({
           success: false,
           message: UNSUPPORTED_IMAGE_MESSAGE,
+        });
+        return;
+      }
+
+      // This route has no `assetType` validation, so a client *can* send
+      // `assetType=brand-logo` as a multipart field and reach the SVG branch
+      // (dev-only: the route 404s in production). The content check is what makes
+      // that safe, and it is the reason this controller keeps one even though the
+      // media route's guard would normally have refused the format already.
+      if (detectedMimeType === 'image/svg+xml' && !sanitizeSvgContent(file.buffer)) {
+        res.status(400).json({
+          success: false,
+          message: SVG_SANITIZE_REJECTION_MESSAGE,
         });
         return;
       }

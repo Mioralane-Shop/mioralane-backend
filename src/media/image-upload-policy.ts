@@ -141,11 +141,12 @@ export const sanitizeImageBaseName = (value: string): string => {
 export const buildImageFileName = (
   prefix: string,
   originalname: string,
-  mimeType: SupportedImageMimeType
+  mimeType: BrandLogoMimeType,
+  assetType: MediaAssetType
 ): string => {
   const parsedName = path.parse(originalname).name;
   const safeBaseName = sanitizeImageBaseName(parsedName);
-  const extension = MIME_TO_EXTENSION[mimeType];
+  const extension = extensionForAssetType(mimeType, assetType);
   const uniqueSuffix = `${Date.now()}-${crypto.randomUUID()}`;
 
   return `${prefix}-${safeBaseName}-${uniqueSuffix}${extension}`;
@@ -250,5 +251,32 @@ export const isAllowedImageMimeTypeForAssetType = (
     assetType === 'brand-logo'
       ? (BRAND_LOGO_MIME_ALLOWLIST as readonly string[]).includes(value)
       : (MEDIA_IMAGE_MIME_ALLOWLIST as readonly string[]).includes(value)
+  );
+};
+
+/**
+ * The stored extension for a detected type, as a function of the asset type.
+ *
+ * Exists because `MIME_TO_EXTENSION` alone is not enough once SVG is reachable:
+ * `image/svg+xml` is absent from it, so looking an SVG up there yields
+ * `undefined` and the stored file name would lose its extension entirely. That
+ * was a real latent bug in the first cut of the brand-logo path, caught while
+ * wiring it rather than in production.
+ *
+ * The fallback is only a safety net: an SVG can only reach here with
+ * `assetType === 'brand-logo'`, because the upload guard refuses it for every
+ * other asset type.
+ */
+export const extensionForAssetType = (
+  mimeType: BrandLogoMimeType | SupportedImageMimeType,
+  assetType: MediaAssetType
+): string => {
+  if (assetType === 'brand-logo' && mimeType in BRAND_LOGO_MIME_TO_EXTENSION) {
+    return BRAND_LOGO_MIME_TO_EXTENSION[mimeType as BrandLogoMimeType];
+  }
+
+  return (
+    MIME_TO_EXTENSION[mimeType as SupportedImageMimeType] ??
+    BRAND_LOGO_MIME_TO_EXTENSION[mimeType as BrandLogoMimeType]
   );
 };

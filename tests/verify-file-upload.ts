@@ -33,12 +33,18 @@
 import { readFileSync } from 'node:fs';
 import type { Server } from 'node:http';
 import { join } from 'node:path';
-import express, { type Request, type RequestHandler, type Response } from 'express';
+import express, { type NextFunction, type Request, type RequestHandler, type Response } from 'express';
 import { errorHandler, notFoundHandler, requestId } from '../src/middleware/error.middleware';
 import { createSingleFileUpload } from '../src/middleware/multipart-upload';
+import { validate } from '../src/middleware/validate.middleware';
+import { MediaController } from '../src/media/media.controller';
+import { mediaUploadSchema } from '../src/media/media-upload.schemas';
+import type { ImageKitService } from '../src/imagekit/imagekit.service';
+import type { MediaAssetType, MediaUploadResponseData } from '../src/media/media.types';
 import {
     EMPTY_IMAGE_MESSAGE,
     MISSING_IMAGE_MESSAGE,
+    UNSUPPORTED_BRAND_LOGO_MESSAGE,
     UNSUPPORTED_IMAGE_MESSAGE,
     readImageMimeType,
     readUploadedFile,
@@ -58,12 +64,14 @@ import {
     isAllowedImageMimeTypeForAssetType,
     sanitizeImageBaseName,
     sanitizeSvgContent,
+    type BrandLogoMimeType,
 } from '../src/media/image-upload-policy';
 
 const SRC_DIR = join(__dirname, '..', 'src');
 const MEDIA_ROUTES_FILE = join(SRC_DIR, 'media', 'media.routes.ts');
 const MEDIA_CONTROLLER_FILE = join(SRC_DIR, 'media', 'media.controller.ts');
 const IMAGEKIT_ROUTES_FILE = join(SRC_DIR, 'imagekit', 'imagekit.module.ts');
+const IMAGEKIT_CONTROLLER_FILE = join(SRC_DIR, 'imagekit', 'imagekit.controller.ts');
 const IMAGEKIT_SERVICE_FILE = join(SRC_DIR, 'imagekit', 'imagekit.service.ts');
 const POLICY_FILE = join(SRC_DIR, 'media', 'image-upload-policy.ts');
 const MULTIPART_FILE = join(SRC_DIR, 'middleware', 'multipart-upload.ts');
@@ -242,13 +250,84 @@ const buildProbeApp = (options: { withGuard: boolean; maxBytes?: number; counter
             data: {
                 mimeType,
                 declaredMimeType: file.mimetype,
-                storedName: buildImageFileName('mioralane-product', file.originalname, mimeType),
+                storedName: buildImageFileName('mioralane-product', file.originalname, mimeType, 'product'),
                 byteLength: file.buffer.length,
             },
         });
     });
 
     app.post('/probe', ...handlers);
+    app.use(notFoundHandler);
+    app.use(errorHandler);
+
+    return app;
+};
+
+/**
+ * A probe app that mounts the **real** media pipeline — multer, `validate`, the
+ * content guard and `MediaController.uploadImage` — with only ImageKit itself
+ * replaced by a stub.
+ *
+ * The app above *mirrors* the controller; this one **is** it, so the `assetType`
+ * branching and the SVG gate are exercised exactly as they ship. The controller is
+ * imported directly rather than through `media.routes.ts` because that module
+ * builds its own `ImageKitService` at import time and the constructor throws
+ * without three env vars — this harness has to run offline, without credentials.
+ */
+const buildMediaRouteProbeApp = (): express.Application => {
+    const uploads: { assetType: string; mimeType: string }[] = [];
+
+    /**
+     * Only the one method the controller calls is implemented, so the stub cannot
+     * quietly satisfy a second call site a later refactor introduces.
+     */
+    const stubService = {
+        uploadMediaImage: async (
+            _file: { buffer: Buffer; originalname: string; mimetype: string; size: number },
+            mimeType: BrandLogoMimeType,
+            assetType: MediaAssetType
+        ): Promise<MediaUploadResponseData> => {
+            uploads.push({ assetType, mimeType });
+
+            const extension = mimeType === 'image/svg+xml' ? '.svg' : '.png';
+
+            return {
+                provider: 'imagekit',
+                assetType,
+                fileId: `stub-${uploads.length}`,
+                url: `https://ik.imagekit.io/7sz3r4tou/${assetType}/stub${extension}`,
+                name: `stub${extension}`,
+                width: null,
+                height: null,
+                size: 0,
+                mimeType,
+                fileType: 'image',
+                thumbnailUrl: null,
+            };
+        },
+    } as unknown as ImageKitService;
+
+    const mediaController = new MediaController(stubService);
+
+    const app = express();
+
+    app.use(requestId);
+
+    app.post(
+        '/probe',
+        createSingleFileUpload({
+            maxBytes: MAX_MEDIA_UPLOAD_SIZE_BYTES,
+            tooLargeMessage: MEDIA_TOO_LARGE_MESSAGE,
+        }),
+        // The same order as `media.routes.ts`, including the schema that rejects a
+        // missing or unknown `assetType` before the guard ever sees the request.
+        validate({ body: mediaUploadSchema, message: 'assetType must be product, combo, or campaign' }),
+        requireImageUpload(),
+        (req: Request, res: Response, next: NextFunction) => {
+            void mediaController.uploadImage(req, res).catch(next);
+        }
+    );
+
     app.use(notFoundHandler);
     app.use(errorHandler);
 
@@ -406,7 +485,7 @@ const main = async (): Promise<void> => {
         `"..." -> ${sanitizeImageBaseName('...')}`
     );
 
-    const traversed = buildImageFileName('mioralane-product', '../../../etc/passwd', 'image/png');
+    const traversed = buildImageFileName('mioralane-product', '../../../etc/passwd', 'image/png', 'product');
 
     check(
         'a stored name carries no directory component and no traversal',
@@ -414,7 +493,7 @@ const main = async (): Promise<void> => {
         traversed
     );
 
-    const doubleExtension = buildImageFileName('mioralane-product', 'file.jpg.php', 'image/png');
+    const doubleExtension = buildImageFileName('mioralane-product', 'file.jpg.php', 'image/png', 'product');
 
     check(
         'a double extension cannot survive: the extension comes from the bytes',
@@ -423,22 +502,22 @@ const main = async (): Promise<void> => {
     );
     check(
         'the same bytes sent as photo.jpg are stored as .webp, not .jpg',
-        buildImageFileName('mioralane-product', 'photo.jpg', 'image/webp').endsWith('.webp'),
-        buildImageFileName('mioralane-product', 'photo.jpg', 'image/webp')
+        buildImageFileName('mioralane-product', 'photo.jpg', 'image/webp', 'product').endsWith('.webp'),
+        buildImageFileName('mioralane-product', 'photo.jpg', 'image/webp', 'product')
     );
     check(
         'two names built from the same input differ (nothing is overwritten)',
-        buildImageFileName('p', 'a.png', 'image/png') !== buildImageFileName('p', 'a.png', 'image/png'),
+        buildImageFileName('p', 'a.png', 'image/png', 'product') !== buildImageFileName('p', 'a.png', 'image/png', 'product'),
         'the unique suffix is missing'
     );
     check(
         'a very long name is capped and cannot end in a separator',
         (() => {
-            const long = buildImageFileName('mioralane-product', `${'a'.repeat(400)}.png`, 'image/png');
+            const long = buildImageFileName('mioralane-product', `${'a'.repeat(400)}.png`, 'image/png', 'product');
 
             return long.length < 200 && !/[.-]{2,}/.test(long) && !/[.-]$/.test(long.replace(/\.[a-z]+$/, ''));
         })(),
-        `length ${buildImageFileName('mioralane-product', `${'a'.repeat(400)}.png`, 'image/png').length}`
+        `length ${buildImageFileName('mioralane-product', `${'a'.repeat(400)}.png`, 'image/png', 'product').length}`
     );
 
     /* ── C. end-to-end through the real pipeline ──────────────────────── */
@@ -862,7 +941,10 @@ const main = async (): Promise<void> => {
             mediaController.includes('detectedMimeType === undefined') &&
             // The guard is the only thing that sets this field; code, not prose.
             uploadValidatorSource.includes('imageMimeType = detectedMimeType') &&
-            uploadValidatorSource.includes('imageMimeType?: SupportedImageMimeType'),
+            // Widened to the brand-logo union on 2026-10-10 (SVG support), which
+            // does not weaken this: the guard still cannot put an SVG in here
+            // unless the route declared `assetType: 'brand-logo'`.
+            uploadValidatorSource.includes('imageMimeType?: BrandLogoMimeType'),
         'the controller does not fail closed when the guard is absent'
     );
 
@@ -974,6 +1056,152 @@ const main = async (): Promise<void> => {
         SVG_SANITIZE_REJECTION_MESSAGE === 'SVG contains scripts or event handlers',
         SVG_SANITIZE_REJECTION_MESSAGE
     );
+    check(
+        'the brand-logo rejection wording exists and names SVG',
+        UNSUPPORTED_BRAND_LOGO_MESSAGE === 'Only JPEG, PNG, WebP, and SVG images are allowed',
+        UNSUPPORTED_BRAND_LOGO_MESSAGE
+    );
+    check(
+        'a brand-logo SVG is stored WITH its extension (the latent bug the assetType parameter fixes)',
+        // Before `extensionForAssetType`, `MIME_TO_EXTENSION['image/svg+xml']` was
+        // `undefined`, so the stored name ended at the uuid and the file had no
+        // format at all. The full `<base>-<13 digits>-<uuid>.svg` shape is pinned
+        // rather than a bare `endsWith`, which the fallback would satisfy anyway.
+        /-\d{13}-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.svg$/.test(
+            buildImageFileName('mioralane-brand-logo', 'Wordmark.svg', 'image/svg+xml', 'brand-logo')
+        ),
+        buildImageFileName('mioralane-brand-logo', 'Wordmark.svg', 'image/svg+xml', 'brand-logo')
+    );
+
+    const imagekitControllerSource = readSource(IMAGEKIT_CONTROLLER_FILE);
+
+    check(
+        'the guard branches on the declared assetType and only brand-logo widens',
+        uploadValidatorSource.includes("readAssetType(req) === 'brand-logo'") &&
+            uploadValidatorSource.includes('detectBrandLogoMimeType(file.buffer)') &&
+            uploadValidatorSource.includes(
+                "isAllowedImageMimeTypeForAssetType(detectedMimeType, 'brand-logo')"
+            ) &&
+            uploadValidatorSource.includes('isAllowedImageMimeType(detectedMimeType)'),
+        'the guard does not branch, or branches on a value it never checked'
+    );
+    check(
+        'the two rejection wordings are selected by that same branch',
+        uploadValidatorSource.includes(
+            'isBrandLogo ? UNSUPPORTED_BRAND_LOGO_MESSAGE : UNSUPPORTED_IMAGE_MESSAGE'
+        ),
+        'a product upload could be told SVG is allowed, or a brand logo told it is not'
+    );
+    check(
+        'both controllers refuse a script-bearing SVG before handing it to ImageKit',
+        mediaController.includes(
+            "detectedMimeType === 'image/svg+xml' && !sanitizeSvgContent(file.buffer)"
+        ) &&
+            mediaController.includes('SVG_SANITIZE_REJECTION_MESSAGE') &&
+            imagekitControllerSource.includes(
+                "detectedMimeType === 'image/svg+xml' && !sanitizeSvgContent(file.buffer)"
+            ) &&
+            imagekitControllerSource.includes('SVG_SANITIZE_REJECTION_MESSAGE'),
+        'an SVG could reach ImageKit unsanitised'
+    );
+
+    /* ── The real chain, end to end ───────────────────────────────────── */
+    section('Brand-logo uploads: the real route chain (branching + the SVG gate)');
+
+    const routeProbe = await listen(buildMediaRouteProbeApp());
+    const failClosedProbe = await listen(buildProbeApp({ withGuard: true, counter: 'guarded' }));
+
+    try {
+        const routePort = portOf(routeProbe);
+        const logoField = [{ name: 'assetType', value: 'brand-logo' }];
+
+        const cleanLogo = await uploadProbe(routePort, {
+            bytes: CLEAN_SVG_BYTES,
+            filename: 'wordmark.svg',
+            declaredType: 'image/svg+xml',
+            extraFields: logoField,
+        });
+
+        check(
+            'a clean SVG uploaded as brand-logo is accepted and comes back with a url',
+            cleanLogo.status === 201 &&
+                typeof dataOf(cleanLogo.body).url === 'string' &&
+                String(dataOf(cleanLogo.body).url).endsWith('.svg'),
+            `${cleanLogo.status} ${cleanLogo.text.slice(0, 100)}`
+        );
+
+        const scriptedLogo = await uploadProbe(routePort, {
+            bytes: SVG_BYTES,
+            filename: 'evil.svg',
+            declaredType: 'image/svg+xml',
+            extraFields: logoField,
+        });
+
+        check(
+            'a script-bearing SVG uploaded as brand-logo is refused with the sanitize message',
+            scriptedLogo.status === 400 &&
+                envelopeOf(scriptedLogo.body).message === SVG_SANITIZE_REJECTION_MESSAGE,
+            `${scriptedLogo.status} ${scriptedLogo.text.slice(0, 100)}`
+        );
+
+        const svgAsProduct = await uploadProbe(routePort, {
+            bytes: CLEAN_SVG_BYTES,
+            filename: 'wordmark.svg',
+            declaredType: 'image/svg+xml',
+            extraFields: [{ name: 'assetType', value: 'product' }],
+        });
+
+        check(
+            'the same clean SVG uploaded as product is refused with the unchanged wording',
+            svgAsProduct.status === 400 &&
+                envelopeOf(svgAsProduct.body).message === UNSUPPORTED_IMAGE_MESSAGE,
+            `${svgAsProduct.status} ${svgAsProduct.text.slice(0, 100)}`
+        );
+
+        /*
+         * Decision 2, evidenced rather than asserted. This app has no `validate`,
+         * so the raw `assetType` reaches the guard exactly as the client typed it.
+         */
+        const failPort = portOf(failClosedProbe);
+        const noAssetType = await uploadProbe(failPort, {
+            bytes: CLEAN_SVG_BYTES,
+            filename: 'wordmark.svg',
+            declaredType: 'image/svg+xml',
+        });
+        const unknownAssetType = await uploadProbe(failPort, {
+            bytes: CLEAN_SVG_BYTES,
+            filename: 'wordmark.svg',
+            declaredType: 'image/svg+xml',
+            extraFields: [{ name: 'assetType', value: 'nonsense' }],
+        });
+        const namedAssetType = await uploadProbe(failPort, {
+            bytes: CLEAN_SVG_BYTES,
+            filename: 'wordmark.svg',
+            declaredType: 'image/svg+xml',
+            extraFields: logoField,
+        });
+
+        check(
+            'FAIL CLOSED: an absent assetType keeps the strict predicate, so the SVG is refused',
+            noAssetType.status === 400 &&
+                envelopeOf(noAssetType.body).message === UNSUPPORTED_IMAGE_MESSAGE,
+            `${noAssetType.status} ${noAssetType.text.slice(0, 100)}`
+        );
+        check(
+            'FAIL CLOSED: an unrecognised assetType answers byte-for-byte like an absent one',
+            unknownAssetType.status === noAssetType.status &&
+                unknownAssetType.text === noAssetType.text,
+            `${unknownAssetType.status} vs ${noAssetType.status}`
+        );
+        check(
+            'CONTROL: the identical bytes ARE accepted once the field names brand-logo',
+            namedAssetType.status === 201 && dataOf(namedAssetType.body).mimeType === 'image/svg+xml',
+            `${namedAssetType.status} ${namedAssetType.text.slice(0, 100)}`
+        );
+    } finally {
+        routeProbe.close();
+        failClosedProbe.close();
+    }
 
     check(
         'multer is configured in exactly one module (G6 consolidation)',

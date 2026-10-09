@@ -14,7 +14,11 @@ import {
   UnprocessableEntityError,
 } from '@imagekit/nodejs';
 import { ImageKitService } from '../imagekit/imagekit.service';
-import { MAX_MEDIA_UPLOAD_SIZE_BYTES } from './image-upload-policy';
+import {
+  MAX_MEDIA_UPLOAD_SIZE_BYTES,
+  SVG_SANITIZE_REJECTION_MESSAGE,
+  sanitizeSvgContent,
+} from './image-upload-policy';
 import {
   EMPTY_IMAGE_MESSAGE,
   MISSING_IMAGE_MESSAGE,
@@ -123,6 +127,20 @@ export class MediaController {
         res.status(400).json({
           success: false,
           message: UNSUPPORTED_IMAGE_MESSAGE,
+        });
+        return;
+      }
+
+      // SVG is reachable only as a brand logo (the guard branches on assetType)
+      // and only when its markup carries no script or event handler. The stored
+      // file is served from our own CDN origin, where a *top-level navigation*
+      // runs an SVG's scripts — inside `<img src>` it would not — so a direct hit
+      // on the asset URL is the real vector. Refused rather than rewritten:
+      // editing markup to remove a vector is how a sanitiser gets bypassed.
+      if (detectedMimeType === 'image/svg+xml' && !sanitizeSvgContent(file.buffer)) {
+        res.status(400).json({
+          success: false,
+          message: SVG_SANITIZE_REJECTION_MESSAGE,
         });
         return;
       }
