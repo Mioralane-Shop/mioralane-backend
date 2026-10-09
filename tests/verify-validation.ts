@@ -2823,7 +2823,7 @@ const PRODUCT_VALIDATED_ROUTES = [
     },
 ].map((route) => ({ ...route, file: 'product/product.routes.ts', routerName: 'router', subject: 'product' }));
 
-/** The four settings singletons. Each is a PUT on its own admin router. */
+/** The five settings singletons. Each is a PUT on its own admin router. */
 const SETTINGS_VALIDATED_ROUTES = [
     {
         file: 'announcement/announcement.routes.ts',
@@ -2832,6 +2832,14 @@ const SETTINGS_VALIDATED_ROUTES = [
         path: '/',
         controller: 'updateAdminAnnouncementBar',
         label: 'PUT /api/admin/announcement',
+    },
+    {
+        file: 'mega-menu/mega-menu.routes.ts',
+        routerName: 'adminMegaMenuRoutes',
+        method: 'put',
+        path: '/',
+        controller: 'updateAdminMegaMenu',
+        label: 'PUT /api/admin/mega-menu',
     },
     {
         file: 'cross-sell/cross-sell.routes.ts',

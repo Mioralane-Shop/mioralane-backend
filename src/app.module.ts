@@ -26,6 +26,7 @@ import {
   adminAnnouncementRoutes,
   announcementPublicRoutes,
 } from './announcement/announcement.routes';
+import { adminMegaMenuRoutes, megaMenuPublicRoutes } from './mega-menu/mega-menu.routes';
 import reviewRoutes from './review/review.routes';
 import adminReviewRoutes from './review/admin-review.routes';
 import helmet from 'helmet';
@@ -253,6 +254,10 @@ const createApp = (options: CreateAppOptions = {}): express.Application => {
   // Storefront announcement bar (top ticker) — managed from its own admin menu
   app.use('/api/admin/announcement', adminAnnouncementRoutes);
   app.use('/api/announcements', announcementPublicRoutes);
+
+  // Storefront "Shop" mega menu (desktop navbar panel) — curation-only singleton
+  app.use('/api/admin/mega-menu', adminMegaMenuRoutes);
+  app.use('/api/mega-menu', megaMenuPublicRoutes);
   app.use('/api/shipping', shippingRoutes);
 
   // Wishlist routes (authenticated user flow)
