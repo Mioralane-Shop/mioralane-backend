@@ -261,6 +261,7 @@ const ENTITY_LABELS: Record<ActivityEntityType, string> = {
     ADDRESS: 'address',
     WISHLIST: 'wishlist',
     REVIEW: 'review',
+    BRAND: 'brand',
 };
 
 const ACTION_VERBS: Record<ActivityAction, string> = {
