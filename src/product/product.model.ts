@@ -12,6 +12,12 @@ const integerStockValidator = {
 
 export interface IProduct {
   title: string;
+  /**
+   * The name shown wherever the product appears in a list — cards, grids, search
+   * results, cart and wishlist rows. OPTIONAL: absent or empty means "use `title`",
+   * which is what the serializers resolve and what the storefront relies on.
+   */
+  shortName?: string;
   slug: string;
   brand: string;
   category: string;
@@ -68,7 +74,25 @@ const ProductSchema = new Schema<IProductDocument>(
       type: String,
       required: [true, 'Product title is required'],
       trim: true,
-      maxlength: [200, 'Title cannot exceed 200 characters'],
+      // 150, not the API's former 200: the field is the product's full name and it is
+      // what the card falls back to, so it still has to be a title rather than a
+      // paragraph. Safe to tighten — the longest stored title is 68 characters.
+      maxlength: [150, 'Title cannot exceed 150 characters'],
+    },
+
+    /**
+     * The name on cards and every other compact listing.
+     *
+     * OPTIONAL, and that is the point: empty means "use `title`", so a product whose
+     * card name matches its full name never needs this filled in — and a stored copy
+     * cannot go stale when the title is edited. The API caps it at 60 characters
+     * (`SHORT_NAME_MAX_CHARS`); the schema stays looser so a longer legacy value
+     * cannot make an unrelated save fail.
+     */
+    shortName: {
+      type: String,
+      trim: true,
+      maxlength: [200, 'Short name cannot exceed 200 characters'],
     },
 
     slug: {
@@ -314,6 +338,10 @@ const ProductSchema = new Schema<IProductDocument>(
 
         // ── Field aliases for frontend ProductCard compatibility ──
         r.name = r.title;                             // ProductCard renders product.name
+        // An empty `shortName` means "use the title". Resolved here so no consumer has
+        // to know the rule, and so a card is never handed `undefined` and printing
+        // nothing at all.
+        r.shortName = r.shortName || r.title;
         r.concerns = r.skinConcern;                   // ProductCard renders product.concerns
         r.reviewCount = r.numReviews;                 // ProductCard expects reviewCount
         r.description = r.description || '';          // ensure string

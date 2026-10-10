@@ -1895,6 +1895,7 @@ const checkComboSchemas = async (url: string): Promise<void> => {
 /** Minimal shape the admin product form sends for a create. */
 const validProductCreate = {
     title: 'Vitamin C Serum',
+    shortName: 'Vitamin C Serum',
     brand: 'Mioralane',
     category: 'serum',
     description: 'Brightening serum',
@@ -2007,6 +2008,50 @@ const checkProductSchemas = async (url: string): Promise<void> => {
             `body.${field}`,
         );
     }
+
+    /* ── the short name budget is 60 characters ─────────────────────────────── */
+
+    const longShortName = await postJson(`${url}/product/create`, {
+        ...validProductCreate,
+        shortName: 'x'.repeat(61),
+    });
+    checkValidationEnvelope(
+        'product: create with a 61-character short name is rejected',
+        longShortName,
+        VALIDATION_FAILURE_MESSAGE,
+        'body.shortName',
+    );
+
+    const atLimitShortName = await postJson(`${url}/product/create`, {
+        ...validProductCreate,
+        shortName: 'x'.repeat(60),
+    });
+    check(
+        'product: create with a 60-character short name is accepted (boundary is inclusive)',
+        atLimitShortName.status === 200,
+        `status=${atLimitShortName.status}`,
+    );
+
+    const withoutShortName = await postJson(`${url}/product/create`, {
+        ...validProductCreate,
+        shortName: undefined,
+    });
+    check(
+        'product: create WITHOUT a short name is accepted — it is optional and falls back to the title',
+        withoutShortName.status === 200,
+        `status=${withoutShortName.status}`,
+    );
+
+    const longTitle = await postJson(`${url}/product/create`, {
+        ...validProductCreate,
+        title: 'x'.repeat(151),
+    });
+    checkValidationEnvelope(
+        'product: create with a 151-character title is rejected',
+        longTitle,
+        VALIDATION_FAILURE_MESSAGE,
+        'body.title',
+    );
 
     /* ── numeric ranges ─────────────────────────────────────────────────────── */
 

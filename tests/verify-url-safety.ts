@@ -296,6 +296,7 @@ const main = (): void => {
 
     const productPayload = {
         title: 'Rosehip Oil',
+        shortName: 'Rosehip Oil',
         brand: 'Mioralane',
         category: 'Skincare',
         price: 1200,

@@ -32,6 +32,7 @@ import {
 /** Fields kept in activity snapshots — keeps audit rows small and readable. */
 const PRODUCT_AUDIT_FIELDS = [
   'title',
+  'shortName',
   'slug',
   'brand',
   'category',
@@ -71,6 +72,7 @@ type ProductMutationBody = Partial<
   Pick<
     IProduct,
     | 'title'
+    | 'shortName'
     | 'slug'
     | 'brand'
     | 'category'
@@ -100,6 +102,7 @@ type ProductMutationBody = Partial<
 
 const mutationFields: (keyof ProductMutationBody)[] = [
   'title',
+  'shortName',
   'slug',
   'brand',
   'category',
@@ -379,8 +382,11 @@ const buildSearchCondition = (search?: string): Record<string, unknown> | null =
   const regex = new RegExp(escapeRegex(query), 'i');
 
   return {
+    // Both names are searched: a customer typing what the card showed matches
+    // `shortName`, and one typing the full title matches `title`.
     $or: [
       { title: regex },
+      { shortName: regex },
       { brand: regex },
       { category: regex },
       { description: regex },
@@ -398,6 +404,9 @@ const formatProduct = (product: ProductAggregateRow): ProductAggregateRow => {
   delete formatted.currentPrice;
 
   formatted.name = formatted.title;
+  // The same rule as the model's `toJSON`: an empty short name resolves to the title,
+  // so the list path never hands a client `shortName: undefined`.
+  formatted.shortName = formatted.shortName || formatted.title;
   formatted.concerns = formatted.skinConcern;
   formatted.reviewCount = formatted.numReviews;
   formatted.description = formatted.description || '';

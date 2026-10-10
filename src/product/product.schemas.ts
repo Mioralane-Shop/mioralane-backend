@@ -77,8 +77,46 @@ const crossSellRecommendationField = z.object({
     enabled: z.boolean().optional(),
 });
 
+/**
+ * The `shortName` budget: 60 characters is a hard maximum.
+ *
+ * Enforced here rather than as a model `maxlength` because Mongoose validates on every
+ * `save()`, including paths that never touch this field, so a model-level cap would
+ * make any longer legacy value fail to save everywhere. This is where the field is
+ * written, so this is where the limit belongs.
+ *
+ * The 30-word budget cannot be reached inside 60 characters: 31 one-character words
+ * already need 61 characters once their separators are counted. It is enforced anyway
+ * so that raising the character cap later cannot silently drop it.
+ */
+export const SHORT_NAME_MAX_CHARS = 60;
+export const SHORT_NAME_MAX_WORDS = 30;
+
+/** The full product name's ceiling. */
+export const PRODUCT_TITLE_MAX_CHARS = 150;
+
+const countWords = (value: string): number => value.trim().split(/\s+/).filter(Boolean).length;
+
 const productFields = {
-    title: z.string().trim().min(1, 'Product title is required').max(200),
+    title: z
+        .string()
+        .trim()
+        .min(1, 'Product title is required')
+        .max(PRODUCT_TITLE_MAX_CHARS, `Product title cannot exceed ${PRODUCT_TITLE_MAX_CHARS} characters`),
+    /**
+     * OPTIONAL. An absent or empty value means "use the title": the serializers resolve
+     * that, so a product whose card name matches its full name needs nothing here.
+     * No `min(1)` for the same reason — `''` is a valid instruction to clear it.
+     */
+    shortName: z
+        .string()
+        .trim()
+        .max(SHORT_NAME_MAX_CHARS, `Short name cannot exceed ${SHORT_NAME_MAX_CHARS} characters`)
+        .refine(
+            (value) => countWords(value) <= SHORT_NAME_MAX_WORDS,
+            `Short name cannot exceed ${SHORT_NAME_MAX_WORDS} words`
+        )
+        .optional(),
     slug: z.string().trim().max(200).optional(),
     brand: z.string().trim().min(1, 'Brand is required'),
     category: z.string().trim().min(1, 'Category is required'),
@@ -121,6 +159,8 @@ export const createProductSchema = z.object(productFields);
 /** `PUT /api/products/:id` — a partial patch. */
 export const updateProductSchema = z.object({
     title: productFields.title.optional(),
+    // Optional here too, and `''` clears it back to "use the title".
+    shortName: productFields.shortName,
     slug: productFields.slug,
     brand: productFields.brand.optional(),
     category: productFields.category.optional(),
