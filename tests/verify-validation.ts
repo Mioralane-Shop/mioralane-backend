@@ -73,10 +73,16 @@ import {
 } from '../src/promotion/promotion.schemas';
 import { createComboSchema, updateComboSchema } from '../src/combo/combo.schemas';
 import {
+    DESCRIPTION_MAX_CHARS,
+    HOW_TO_USE_MAX_CHARS,
+    INGREDIENTS_MAX_CHARS,
+    SKIN_CONCERN_MAX_CHARS,
+    SKIN_TYPE_MAX_CHARS,
     createProductSchema,
     productArrivalSchema,
     updateProductSchema,
 } from '../src/product/product.schemas';
+import { normalizeVolume } from '../src/product/product-volume';
 import { announcementSettingsSchema } from '../src/announcement/announcement.schemas';
 import { crossSellSettingsSchema } from '../src/cross-sell/cross-sell.schemas';
 import { shippingSettingsSchema } from '../src/shipping/shipping.schemas';
@@ -1899,9 +1905,12 @@ const validProductCreate = {
     brand: 'Mioralane',
     category: 'serum',
     description: 'Brightening serum',
+    ingredients: 'Water, Ascorbic Acid, Glycerin',
+    howToUse: 'Apply a few drops to clean skin, morning and night.',
     price: 1200,
     salePrice: 990,
     stock: 25,
+    volume: '30ml',
     images: ['https://ik.imagekit.io/mioralane/products/a.png'],
     skinType: ['Oily'],
     skinConcern: ['Dullness'],
@@ -1996,7 +2005,24 @@ const checkProductSchemas = async (url: string): Promise<void> => {
 
     /* ── create requires the model's required fields ─────────────────────────── */
 
-    for (const field of ['title', 'brand', 'category', 'price']) {
+    // The first four were always required. The rest joined them: a product missing any
+    // one of them renders an empty section on the storefront rather than an
+    // obviously-incomplete one. `shortName` is deliberately absent from the list — it is
+    // optional and blank means "use the full title". So is `lowStockThreshold`, whose
+    // empty state means "use the global threshold".
+    for (const field of [
+        'title',
+        'brand',
+        'category',
+        'price',
+        'description',
+        'ingredients',
+        'howToUse',
+        'skinType',
+        'skinConcern',
+        'stock',
+        'volume',
+    ]) {
         const response = await postJson(`${url}/product/create`, {
             ...validProductCreate,
             [field]: undefined,
@@ -2008,6 +2034,16 @@ const checkProductSchemas = async (url: string): Promise<void> => {
             `body.${field}`,
         );
     }
+
+    const withoutThreshold = await postJson(`${url}/product/create`, {
+        ...validProductCreate,
+        lowStockThreshold: undefined,
+    });
+    check(
+        'product: create WITHOUT lowStockThreshold is still accepted — it is the one inventory field that stays optional',
+        withoutThreshold.status === 200,
+        `status=${withoutThreshold.status} message=${String(withoutThreshold.body.message)}`,
+    );
 
     /* ── the short name budget is 60 characters ─────────────────────────────── */
 
@@ -2032,6 +2068,22 @@ const checkProductSchemas = async (url: string): Promise<void> => {
         `status=${atLimitShortName.status}`,
     );
 
+    /**
+     * The assertion that pins "spaces count": 60 letters separated by 29 spaces is 89
+     * characters, so it is over the 60-character ceiling. Under any limit that measured
+     * the letters only, this value would have been accepted.
+     */
+    const spacedShortName = await postJson(`${url}/product/create`, {
+        ...validProductCreate,
+        shortName: 'ab '.repeat(30).trim(),
+    });
+    checkValidationEnvelope(
+        'product: a short name of 89 characters (60 letters, 29 spaces) is rejected — spaces count',
+        spacedShortName,
+        VALIDATION_FAILURE_MESSAGE,
+        'body.shortName',
+    );
+
     const withoutShortName = await postJson(`${url}/product/create`, {
         ...validProductCreate,
         shortName: undefined,
@@ -2039,7 +2091,17 @@ const checkProductSchemas = async (url: string): Promise<void> => {
     check(
         'product: create WITHOUT a short name is accepted — it is optional and falls back to the title',
         withoutShortName.status === 200,
-        `status=${withoutShortName.status}`,
+        `status=${withoutShortName.status} message=${String(withoutShortName.body.message)}`,
+    );
+
+    const blankShortName = await postJson(`${url}/product/create`, {
+        ...validProductCreate,
+        shortName: '',
+    });
+    check(
+        `product: a blank short name is accepted — '' is the instruction to clear it`,
+        blankShortName.status === 200,
+        `status=${blankShortName.status} message=${String(blankShortName.body.message)}`,
     );
 
     const longTitle = await postJson(`${url}/product/create`, {
@@ -2051,6 +2113,151 @@ const checkProductSchemas = async (url: string): Promise<void> => {
         longTitle,
         VALIDATION_FAILURE_MESSAGE,
         'body.title',
+    );
+
+    /**
+     * The assertion that pins "spaces count" for the title: 40 three-letter words separated
+     * by 39 spaces is 159 characters, of which only 120 are letters. It is refused, and any
+     * limit that measured letters alone would have accepted it.
+     */
+    const spacedTitle = await postJson(`${url}/product/create`, {
+        ...validProductCreate,
+        title: Array.from({ length: 40 }, () => 'abc').join(' '),
+    });
+    checkValidationEnvelope(
+        'product: a title of 159 characters (120 letters, 39 spaces) is rejected — spaces count',
+        spacedTitle,
+        VALIDATION_FAILURE_MESSAGE,
+        'body.title',
+    );
+
+    const atLimitTitle = await postJson(`${url}/product/create`, {
+        ...validProductCreate,
+        title: 'x'.repeat(150),
+    });
+    check(
+        'product: a title of exactly 150 characters is accepted (boundary is inclusive)',
+        atLimitTitle.status === 200,
+        `status=${atLimitTitle.status} message=${String(atLimitTitle.body.message)}`,
+    );
+
+    /* ── the four long-text ceilings, where spaces DO count ──────────────────── */
+
+    /**
+     * The prose ceilings, both directions for each.
+     *
+     * Every one of these three fields is limited by CHARACTERS. There is deliberately no word
+     * budget anywhere on this model: a word count is not comparable with a character ceiling
+     * (300 words is about 1800 characters), so with both in place the two rules disagree about
+     * which one stops the caller — and at 1000 characters a 300-word rule cannot be reached at
+     * all. That combination was shipped once and removed; do not reintroduce it.
+     */
+    const proseCharCases: Array<[string, number]> = [
+        ['description', DESCRIPTION_MAX_CHARS],
+        ['howToUse', HOW_TO_USE_MAX_CHARS],
+        ['ingredients', INGREDIENTS_MAX_CHARS],
+    ];
+
+    /**
+     * There is NO word rule on any of these fields, and this is the assertion that says so.
+     *
+     * Only `ingredients` can carry the proof. 301 one-letter words is 601 characters, which is
+     * inside its 1000-character ceiling but outside the 500-character description ceiling and
+     * the 300-character howToUse one — so for those two, a value with more than 300 words
+     * cannot even be submitted, and no input could tell a word rule apart from the ceiling.
+     * Ingredients can, and any word budget anywhere would refuse this.
+     */
+    const manyWords = await postJson(`${url}/product/create`, {
+        ...validProductCreate,
+        ingredients: Array.from({ length: 301 }, () => 'x').join(' '),
+    });
+    check(
+        'product: ingredients accepts 301 one-letter words (601 characters) — there is no word rule',
+        manyWords.status === 200,
+        `status=${manyWords.status} message=${String(manyWords.body.message)}`,
+    );
+
+    for (const [field, limit] of proseCharCases) {
+        const response = await postJson(`${url}/product/create`, {
+            ...validProductCreate,
+            [field]: 'x'.repeat(limit + 1),
+        });
+        checkValidationEnvelope(
+            `product: ${field} at ${limit + 1} characters is rejected`,
+            response,
+            VALIDATION_FAILURE_MESSAGE,
+            `body.${field}`,
+        );
+
+        const atLimit = await postJson(`${url}/product/create`, {
+            ...validProductCreate,
+            [field]: 'x'.repeat(limit),
+        });
+        check(
+            `product: ${field} at exactly ${limit} characters is accepted (boundary is inclusive)`,
+            atLimit.status === 200,
+            `status=${atLimit.status} message=${String(atLimit.body.message)}`,
+        );
+    }
+
+    // Skin type and skin concern are arrays, and the ceiling is measured on the joined
+    // text, so one over-long entry is the simplest way to exceed it.
+    const longSkinType = await postJson(`${url}/product/create`, {
+        ...validProductCreate,
+        skinType: ['x'.repeat(SKIN_TYPE_MAX_CHARS + 1)],
+    });
+    checkValidationEnvelope(
+        `product: skinType beyond ${SKIN_TYPE_MAX_CHARS} characters is rejected`,
+        longSkinType,
+        VALIDATION_FAILURE_MESSAGE,
+        'body.skinType',
+    );
+
+    const longSkinConcern = await postJson(`${url}/product/create`, {
+        ...validProductCreate,
+        skinConcern: ['x'.repeat(SKIN_CONCERN_MAX_CHARS + 1)],
+    });
+    checkValidationEnvelope(
+        `product: skinConcern beyond ${SKIN_CONCERN_MAX_CHARS} characters is rejected`,
+        longSkinConcern,
+        VALIDATION_FAILURE_MESSAGE,
+        'body.skinConcern',
+    );
+
+    /* ── volume: normalized, not validated ───────────────────────────────────── */
+
+    // A pure function, so it is tested directly rather than through a route that would
+    // need a database. The cases are the two rules that were asked for, plus the values
+    // that must NOT be touched — six stored products carry `5-piece set`-style text.
+    const volumeCases: Array<[string, string]> = [
+        ['100 ml', '100ml'],
+        ['100 ML', '100ml'],
+        ['100ML', '100ml'],
+        ['50 nl', '50nl'],
+        ['100ml', '100ml'],
+        ['30ml', '30ml'],
+        [' 100 ml ', '100ml'],
+        ['5-piece set', '5-piece set'],
+        ['5-piece mini set', '5-piece mini set'],
+        ['50', '50'],
+        ['1.7 fl oz', '1.7 fl oz'],
+        ['100 ml bottle', '100 ml bottle'],
+        ['', ''],
+    ];
+
+    for (const [input, expected] of volumeCases) {
+        const actual = normalizeVolume(input);
+        check(
+            `volume: ${JSON.stringify(input)} normalizes to ${JSON.stringify(expected)}`,
+            actual === expected,
+            `got ${JSON.stringify(actual)}`,
+        );
+    }
+
+    check(
+        'volume: a non-string is passed through untouched rather than coerced',
+        normalizeVolume(undefined) === undefined,
+        `got ${JSON.stringify(normalizeVolume(undefined))}`,
     );
 
     /* ── numeric ranges ─────────────────────────────────────────────────────── */
@@ -2072,15 +2279,8 @@ const checkProductSchemas = async (url: string): Promise<void> => {
         );
     }
 
-    const descriptionTooLong = await postJson(`${url}/product/create`, {
-        ...validProductCreate,
-        description: 'd'.repeat(2001),
-    });
-    check(
-        "product: description above the model's 2000-character cap is rejected",
-        descriptionTooLong.status === 400,
-        `status=${descriptionTooLong.status}`,
-    );
+    // Description, howToUse and ingredients are asserted together in the prose-ceiling block
+    // above — the same three fields, both boundary directions — so they are not repeated here.
 
     /* ── enums that DO exist in the model ───────────────────────────────────── */
 

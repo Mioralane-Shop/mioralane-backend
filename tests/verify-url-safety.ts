@@ -299,7 +299,14 @@ const main = (): void => {
         shortName: 'Rosehip Oil',
         brand: 'Mioralane',
         category: 'Skincare',
+        description: 'Cold-pressed rosehip oil.',
+        ingredients: 'Rosa Canina Fruit Oil',
+        howToUse: 'Apply two drops to clean skin.',
         price: 1200,
+        stock: 10,
+        volume: '30ml',
+        skinType: ['Dry'],
+        skinConcern: ['Dryness'],
     };
     const productBaseline = createProductSchema.safeParse(productPayload);
     check('baseline product payload parses', productBaseline.success, describe(productBaseline));

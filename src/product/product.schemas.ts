@@ -81,52 +81,122 @@ const crossSellRecommendationField = z.object({
  * The `shortName` budget: 60 characters is a hard maximum.
  *
  * Enforced here rather than as a model `maxlength` because Mongoose validates on every
- * `save()`, including paths that never touch this field, so a model-level cap would
- * make any longer legacy value fail to save everywhere. This is where the field is
- * written, so this is where the limit belongs.
+ * `save()`, including paths that never touch this field, so a model-level cap would make
+ * any longer legacy value fail to save everywhere. This is where the field is written, so
+ * this is where the limit belongs.
  *
- * The 30-word budget cannot be reached inside 60 characters: 31 one-character words
- * already need 61 characters once their separators are counted. It is enforced anyway
- * so that raising the character cap later cannot silently drop it.
+ * Spaces are ordinary characters: the count is `value.length`, the same number the admin's
+ * input `maxLength` and its counter use. There is no word budget.
  */
 export const SHORT_NAME_MAX_CHARS = 60;
-export const SHORT_NAME_MAX_WORDS = 30;
 
-/** The full product name's ceiling. */
+/** The full product name's ceiling, measured the same way. */
 export const PRODUCT_TITLE_MAX_CHARS = 150;
 
-const countWords = (value: string): number => value.trim().split(/\s+/).filter(Boolean).length;
+/** The four long-text ceilings. Spaces count, as they do in every limit in this file. */
+/**
+ * Every limit on this model is a CHARACTER count, so a caller has one kind of number to reason
+ * about.
+ *
+ * 300-word budgets were tried here on the two prose fields and removed. A word count is not
+ * comparable with the character ceilings around it, so with both rules in place they disagreed
+ * about which one was going to stop the caller, and at a 500-character ceiling a 300-word rule
+ * could not be reached at all. Do not reintroduce them.
+ */
+export const SKIN_TYPE_MAX_CHARS = 150;
+export const SKIN_CONCERN_MAX_CHARS = 300;
+export const INGREDIENTS_MAX_CHARS = 1000;
+export const DESCRIPTION_MAX_CHARS = 500;
+export const HOW_TO_USE_MAX_CHARS = 300;
+
+const titleField = z
+    .string()
+    .trim()
+    .min(1, 'Product title is required')
+    .max(PRODUCT_TITLE_MAX_CHARS, `Product title cannot exceed ${PRODUCT_TITLE_MAX_CHARS} characters`);
+
+/**
+ * The `shortName` shape, without saying whether it is required.
+ *
+ * OPTIONAL. An absent or empty value means "use the title": the serializers resolve that,
+ * so a product whose card name matches its full name needs nothing here. No `min(1)` for
+ * the same reason — `''` is a valid instruction to clear it.
+ */
+const shortNameShape = z
+    .string()
+    .trim()
+    .max(SHORT_NAME_MAX_CHARS, `Short name cannot exceed ${SHORT_NAME_MAX_CHARS} characters`);
+
+const descriptionField = z
+    .string()
+    .trim()
+    .min(1, 'Description is required')
+    .max(DESCRIPTION_MAX_CHARS, `Description cannot exceed ${DESCRIPTION_MAX_CHARS} characters`);
+
+const ingredientsField = z
+    .string()
+    .trim()
+    .min(1, 'Ingredients are required')
+    .max(INGREDIENTS_MAX_CHARS, `Ingredients cannot exceed ${INGREDIENTS_MAX_CHARS} characters`);
+
+const howToUseField = z
+    .string()
+    .trim()
+    .min(1, 'How to use is required')
+    .max(HOW_TO_USE_MAX_CHARS, `How to use cannot exceed ${HOW_TO_USE_MAX_CHARS} characters`);
+
+/**
+ * The two Skin Information lists.
+ *
+ * Measured on `join('\n')`, and that is deliberately the conservative direction. The
+ * client splits the textarea on newlines and commas and trims every entry, so the joined
+ * length is always less than or equal to the text the user typed. Measuring anything
+ * shorter here would reject a payload whose own counter was inside the limit — a false
+ * failure exactly at the boundary, which is the worst place for one.
+ */
+const skinTypeField = z
+    .array(z.string().trim().min(1, 'Skin type entries cannot be empty'))
+    .min(1, 'Skin type is required')
+    .refine(
+        (value) => value.join('\n').length <= SKIN_TYPE_MAX_CHARS,
+        `Skin type cannot exceed ${SKIN_TYPE_MAX_CHARS} characters`
+    );
+
+const skinConcernField = z
+    .array(z.string().trim().min(1, 'Skin concern entries cannot be empty'))
+    .min(1, 'Skin concern is required')
+    .refine(
+        (value) => value.join('\n').length <= SKIN_CONCERN_MAX_CHARS,
+        `Skin concern cannot exceed ${SKIN_CONCERN_MAX_CHARS} characters`
+    );
+
+/** Required on create, and the value the inventory ledger starts from. */
+const stockField = z.number().int().min(0, 'Stock cannot be negative');
+
+/**
+ * Required, and not a format check — see `normalizeVolume` in the controller for why.
+ * The ceiling is a sanity bound only; real values are four characters.
+ */
+const volumeField = z.string().trim().min(1, 'Volume is required').max(100, 'Volume cannot exceed 100 characters');
 
 const productFields = {
-    title: z
-        .string()
-        .trim()
-        .min(1, 'Product title is required')
-        .max(PRODUCT_TITLE_MAX_CHARS, `Product title cannot exceed ${PRODUCT_TITLE_MAX_CHARS} characters`),
+    title: titleField,
     /**
      * OPTIONAL. An absent or empty value means "use the title": the serializers resolve
      * that, so a product whose card name matches its full name needs nothing here.
-     * No `min(1)` for the same reason — `''` is a valid instruction to clear it.
      */
-    shortName: z
-        .string()
-        .trim()
-        .max(SHORT_NAME_MAX_CHARS, `Short name cannot exceed ${SHORT_NAME_MAX_CHARS} characters`)
-        .refine(
-            (value) => countWords(value) <= SHORT_NAME_MAX_WORDS,
-            `Short name cannot exceed ${SHORT_NAME_MAX_WORDS} words`
-        )
-        .optional(),
+    shortName: shortNameShape.optional(),
     slug: z.string().trim().max(200).optional(),
     brand: z.string().trim().min(1, 'Brand is required'),
     category: z.string().trim().min(1, 'Category is required'),
-    description: z.string().max(2000).optional(),
-    ingredients: z.string().optional(),
-    howToUse: z.string().optional(),
+    /** Optional in a patch, but a supplied value must be non-empty: see `descriptionField`. */
+    description: descriptionField.optional(),
+    ingredients: ingredientsField.optional(),
+    howToUse: howToUseField.optional(),
     keyIngredients: keyIngredientField.optional(),
-    /** Free-form arrays — `[String]` in the model, no enum. */
-    skinType: z.array(z.string()).optional(),
-    skinConcern: z.array(z.string()).optional(),
+    /** Free-form arrays — `[String]` in the model, no enum. Required on create. */
+    skinType: skinTypeField.optional(),
+    skinConcern: skinConcernField.optional(),
     price: z.number().min(0, 'Price cannot be negative'),
     salePrice: z.number().min(0, 'Sale price cannot be negative').optional(),
     /** Free-form in the model; the admin UI narrows it to Sale/Best/New. */
@@ -134,8 +204,13 @@ const productFields = {
     images: z.array(safeUrlSchema()).optional(),
     media: z.array(mediaAssetSchema).optional(),
     hoverImage: safeUrlSchema().optional(),
-    volume: z.string().optional(),
-    /** Routed through the inventory ledger on update, never `set()` directly. */
+    /** Required on create. Not a format check — see `normalizeVolume`. */
+    volume: volumeField.optional(),
+    /**
+     * Required on create. Routed through the inventory ledger on update, never `set()`
+     * directly, which is why it stays optional here: a partial patch must be able to
+     * change one field without restating the stock it is not touching.
+     */
     stock: z.number().int().min(0, 'Stock cannot be non-negative').optional(),
     lowStockThreshold: lowStockThresholdField,
     availabilityMode: z.enum(['in_stock', 'pre_order']).optional(),
@@ -149,12 +224,33 @@ const productFields = {
 /**
  * `POST /api/products`.
  *
- * `title`, `brand`, `category` and `price` are required because the model marks
- * them required and `createProduct` answered "Missing required fields: title,
- * brand, category, price" by hand. `images` stays optional — a payload may supply
- * `media` only, and the controller derives `images` from it.
+ * The required set, and why each member is in it: `title`, `brand`, `category` and
+ * `price` were always required. `description`, `ingredients`, `howToUse`, `skinType`,
+ * `skinConcern`, `stock` and `volume` joined them, because a product without them renders
+ * an empty section on the storefront rather than an incomplete-looking one — a details page
+ * with no description, a table with no volume.
+ *
+ * `shortName` is deliberately NOT in that list. It is optional and blank means "use the
+ * full title", which the serializers resolve on read.
+ *
+ * Neither is `lowStockThreshold`, despite being inventory: its empty state means "use the
+ * global threshold", which is a real instruction rather than a gap. `salePrice` is an
+ * optional discount. `images` stays optional because a payload may supply `media` only,
+ * and the controller derives `images` from it, refusing the request when both are empty.
+ *
+ * These strict shapes are applied HERE rather than to `productFields`, so that
+ * `updateProductSchema` keeps its permissive entries and a partial patch still works.
  */
-export const createProductSchema = z.object(productFields);
+export const createProductSchema = z.object({
+    ...productFields,
+    description: descriptionField,
+    ingredients: ingredientsField,
+    howToUse: howToUseField,
+    skinType: skinTypeField,
+    skinConcern: skinConcernField,
+    stock: stockField,
+    volume: volumeField,
+});
 
 /** `PUT /api/products/:id` — a partial patch. */
 export const updateProductSchema = z.object({

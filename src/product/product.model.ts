@@ -74,9 +74,9 @@ const ProductSchema = new Schema<IProductDocument>(
       type: String,
       required: [true, 'Product title is required'],
       trim: true,
-      // 150, not the API's former 200: the field is the product's full name and it is
-      // what the card falls back to, so it still has to be a title rather than a
-      // paragraph. Safe to tighten — the longest stored title is 68 characters.
+      // 150, matching the request schema exactly, because the limit counts every
+      // character including spaces. The longest stored title is 78 characters, so this
+      // is both the visible limit and the stored bound.
       maxlength: [150, 'Title cannot exceed 150 characters'],
     },
 
@@ -119,19 +119,27 @@ const ProductSchema = new Schema<IProductDocument>(
     description: {
       type: String,
       default: '',
-      maxlength: [2000, 'Description cannot exceed 2000 characters'],
+      // 500, matching `DESCRIPTION_MAX_CHARS` in the request schema. The longest stored
+      // description is 345 characters, so nothing in the catalogue is affected.
+      maxlength: [500, 'Description cannot exceed 500 characters'],
     },
 
     ingredients: {
       type: String,
       trim: true,
       default: undefined,
+      // 1000, matching `INGREDIENTS_MAX_CHARS` in the request schema. This field had no ceiling
+      // of its own before, which was only safe while the schema capped it; the bound belongs
+      // here too so the model cannot accept what the API refuses. Longest stored value: 823.
+      maxlength: [1000, 'Ingredients cannot exceed 1000 characters'],
     },
 
     howToUse: {
       type: String,
       trim: true,
       default: undefined,
+      // 300, matching `HOW_TO_USE_MAX_CHARS` in the request schema. Longest stored value: 207.
+      maxlength: [300, 'How to use cannot exceed 300 characters'],
     },
 
     keyIngredients: {
