@@ -13,6 +13,7 @@ import {
 } from '../middleware/error.middleware';
 import { normalizeOptionalLowStockThreshold } from '../inventory/inventory.service';
 import { applyCatalogStockChange } from '../inventory/inventory-transaction.service';
+import { normalizeVolume } from './product-volume';
 import {
   buildActivityChanges,
   pickActivitySnapshot,
@@ -230,6 +231,14 @@ const normalizeInventoryFields = (body: ProductMutationBody): void => {
 
   if (normalizedThreshold !== undefined) {
     body.lowStockThreshold = normalizedThreshold;
+  }
+
+  // Applied here as well as in the admin form, so a payload from an older admin bundle
+  // or from curl cannot store the un-normalized shape either.
+  const rawVolume = (body as Record<string, unknown>).volume;
+
+  if (rawVolume !== undefined) {
+    body.volume = normalizeVolume(rawVolume) as string;
   }
 };
 
