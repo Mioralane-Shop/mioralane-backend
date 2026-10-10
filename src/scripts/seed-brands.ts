@@ -8,33 +8,34 @@
  * dropdown read that constant). This script is what the admin-managed version
  * replaces it with, so the list and the order are copied rather than invented.
  *
- * ## Why the logo file names are spelled out per brand
+ * ## Why the seed writes no `logoUrl`
  *
- * The obvious `logoUrl: \`/brands/${slug}.svg\`` is wrong for four of the six:
- * slugify() lower-cases, but the files on disk are `COSRX.svg`,
- * `Beauty-of-Joseon.svg`, `Purito.svg` and `AXIS-Y.svg`. `/brands/cosrx.svg`
- * resolves on Windows and **404s on every deployed Linux environment** — a
- * filesystem that is case-insensitive exactly where you are testing it. Only
- * `anua.svg` and `skin1004.svg` happen to match their slug.
+ * It used to. Six brands were mapped to their exact file names in
+ * `mioralane-frontend/public/brands` (spelled out per brand, because `slugify()`
+ * lower-cases while the files are `COSRX.svg`, `Beauty-of-Joseon.svg` and so on —
+ * a `/brands/cosrx.svg` path resolves on Windows and 404s on Linux), and the seed
+ * wrote that path into `logoUrl`.
  *
- * `mioralane-frontend`'s own `components/common/brands-marquee.tsx` already
- * hardcodes these same six with this exact casing, which is the authoritative
- * list. If the SVGs are ever renamed to their slugs, this map is what to delete.
+ * That was wrong in kind, not just in detail: it made the **storefront repository
+ * the source of truth for brand artwork**. A logo is an uploaded asset — an admin
+ * picks a file, `POST /api/media/images` stores it, and `logoUrl` points at the
+ * CDN. Bundling artwork in the app repo means adding a logo needs a frontend
+ * deploy, and re-running this seed would silently revert every uploaded logo back
+ * to a path in that repo.
+ *
+ * So the seed sets `name`, `slug`, `order` and the visibility flags, and leaves
+ * `logoUrl` and `logoAlt` unset. Upload the logo in the admin panel.
  *
  * ## Why no logoWidth / logoHeight
  *
- * Those fields exist to reserve a box so a raster logo cannot shift the layout
- * when it loads. All six of these are SVG — vector, with no intrinsic pixel size
- * to record — so the storefront sizes them from CSS. They stay empty until an
- * admin replaces one with an uploaded raster, which is when the upload records
- * the dimensions the API returns.
+ * Those fields reserve a box so an uploaded raster cannot shift the layout as it
+ * loads. The storefront sizes brand logos from CSS instead, so they are left out
+ * deliberately — see the same note on the admin's brand payload type.
  *
- * ## Not content-checked, deliberately
+ * ## Artwork always takes the guarded path
  *
- * `sanitizeSvgContent()` runs on UPLOAD only, so these six committed SVGs bypass
- * it. They are repository assets reviewed in a pull request, not client input —
- * the check exists to stop an *uploader* storing script-bearing markup. Anything
- * an admin uploads through `POST /api/media/images` takes the guarded path.
+ * `sanitizeSvgContent()` runs on upload, and uploading is now the only way a logo
+ * enters the collection. Nothing here bypasses it.
  */
 
 import "../env"; // load .env
@@ -81,18 +82,23 @@ const BRAND_NAMES = [
 ];
 
 /**
- * The six brands that ship with artwork, mapped to the EXACT file name in
- * `mioralane-frontend/public/brands`. See the header for why this is not derived
- * from the slug.
+ * Brands that are expected to carry artwork, and so are pre-flagged for the
+ * homepage marquee.
+ *
+ * This was a map to file names in `mioralane-frontend/public/brands`; the names
+ * are all that is left of it (see the header). The flag records the *intent* to
+ * show a brand in the marquee, preserved so that uploading a logo is all it takes
+ * for these to appear — `listMarqueeBrands()` still requires a logo, so a flagged
+ * brand without artwork stays out.
  */
-const LOGO_FILE_BY_NAME: Readonly<Record<string, string>> = {
-    COSRX: "COSRX.svg",
-    "Beauty of Joseon": "Beauty-of-Joseon.svg",
-    Anua: "anua.svg",
-    Purito: "Purito.svg",
-    SKIN1004: "skin1004.svg",
-    "Axis-Y": "AXIS-Y.svg",
-};
+const MARQUEE_NAMES: ReadonlySet<string> = new Set([
+    "COSRX",
+    "Beauty of Joseon",
+    "Anua",
+    "Purito",
+    "SKIN1004",
+    "Axis-Y",
+]);
 
 async function seed() {
     console.log("⏳ Connecting to MongoDB...");
@@ -112,27 +118,23 @@ async function seed() {
             continue;
         }
 
-        const logoFile = LOGO_FILE_BY_NAME[name];
-
         const brand = await Brand.create({
             name,
             slug: slugify(name),
             order: index,
-            // Site-relative so the storefront serves it from its own origin. Only
-            // the six with artwork get one.
-            logoUrl: logoFile ? `/brands/${logoFile}` : undefined,
-            logoAlt: logoFile ? `${name} logo` : undefined,
+            // No `logoUrl` and no `logoAlt`: artwork is uploaded through the admin,
+            // and pointing at a path in the storefront repo is how a logo ends up
+            // 404ing on a deploy. See the header.
             showInNavbar: true,
-            // Only brands WITH a logo: the marquee renders logos, and
-            // `listMarqueeBrands()` would exclude a logo-less brand anyway.
-            showInMarquee: Boolean(logoFile),
+            // Pre-flagged so that uploading a logo is all it takes for these to
+            // appear. `listMarqueeBrands()` also requires a logo, so an artwork-less
+            // brand stays out either way.
+            showInMarquee: MARQUEE_NAMES.has(name),
             visible: true,
         });
 
         created += 1;
-        console.log(
-            `✅ Created "${brand.name}" (slug: ${brand.slug})${logoFile ? ` — logo ${logoFile}` : ""}`
-        );
+        console.log(`✅ Created "${brand.name}" (slug: ${brand.slug})`);
     }
 
     const total = await Brand.countDocuments();
