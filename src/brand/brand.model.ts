@@ -32,14 +32,18 @@ export interface IBrand {
   name: string;
   /** Unique, lower-case handle derived from `name` when the client omits it. */
   slug: string;
-  /** ImageKit URL of the logo. Absent for most brands — only a few have artwork. */
+  /**
+   * ImageKit URL of the logo. Optional, never required: every brand currently has
+   * artwork, but the field may be absent on a brand saved without a logo.
+   */
   logoUrl?: string;
   /** Alt text for the logo, for SEO and screen readers. */
   logoAlt?: string;
   /**
-   * Intrinsic pixel dimensions of the logo, stored so the storefront can set
-   * `width`/`height` and reserve the box before the image loads. A logo grid that
-   * reflows once the images arrive is the layout shift this prevents.
+   * Intrinsic pixel dimensions of the logo. Kept for API parity only: nothing
+   * reads them today. Every logo surface (brand grid, marquee, admin thumbnail)
+   * sizes the image in CSS, which reserves the box before it loads, so layout is
+   * already stable without these. Unpopulated for the brands uploaded so far.
    */
   logoWidth?: number;
   logoHeight?: number;
