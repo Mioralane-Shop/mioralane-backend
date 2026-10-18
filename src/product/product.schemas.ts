@@ -217,7 +217,7 @@ const productFields = {
     preOrder: preOrderField,
     isBestSeller: z.boolean().optional(),
     isNewArrival: z.boolean().optional(),
-    isTrending: z.boolean().optional(),
+    isPopularPick: z.boolean().optional(),
     crossSellRecommendations: z.array(crossSellRecommendationField).optional(),
 };
 
@@ -279,7 +279,7 @@ export const updateProductSchema = z.object({
     preOrder: productFields.preOrder,
     isBestSeller: productFields.isBestSeller,
     isNewArrival: productFields.isNewArrival,
-    isTrending: productFields.isTrending,
+    isPopularPick: productFields.isPopularPick,
     crossSellRecommendations: productFields.crossSellRecommendations,
 });
 

@@ -96,7 +96,7 @@ type ProductMutationBody = Partial<
     | 'preOrder'
     | 'isBestSeller'
     | 'isNewArrival'
-    | 'isTrending'
+    | 'isPopularPick'
     | 'crossSellRecommendations'
   >
 >;
@@ -126,7 +126,7 @@ const mutationFields: (keyof ProductMutationBody)[] = [
   'preOrder',
   'isBestSeller',
   'isNewArrival',
-  'isTrending',
+  'isPopularPick',
   'crossSellRecommendations',
 ];
 
@@ -419,6 +419,12 @@ const formatProduct = (product: ProductAggregateRow): ProductAggregateRow => {
   formatted.concerns = formatted.skinConcern;
   formatted.reviewCount = formatted.numReviews;
   formatted.description = formatted.description || '';
+  // Aggregate results do not apply Mongoose defaults, so a product stored before a
+  // flag existed would otherwise be returned as `undefined`. Both flags are booleans
+  // in the API contract, and `false` is the safe value for a missing flag.
+  formatted.isBestSeller = Boolean(formatted.isBestSeller);
+  formatted.isNewArrival = Boolean(formatted.isNewArrival);
+  formatted.isPopularPick = Boolean(formatted.isPopularPick);
 
   if (formatted.isBestSeller || formatted.badge === 'Best') {
     formatted.tag = 'best';
@@ -524,7 +530,7 @@ const formatProduct = (product: ProductAggregateRow): ProductAggregateRow => {
  *               isNewArrival:
  *                 type: boolean
  *                 default: false
- *               isTrending:
+ *               isPopularPick:
  *                 type: boolean
  *                 default: false
  *               rating:
@@ -1077,7 +1083,7 @@ export const getCartRecommendations = async (req: Request, res: Response): Promi
  *         name: tab
  *         schema:
  *           type: string
- *           enum: [bestseller, new, trending]
+ *           enum: [bestseller, new, popular]
  *         description: Filter by product tab
  *       - in: query
  *         name: brand
@@ -1178,8 +1184,8 @@ export const getProducts = async (req: Request, res: Response): Promise<void> =>
       andConditions.push({ isBestSeller: true });
     } else if (normalizedTab === 'new') {
       andConditions.push({ isNewArrival: true });
-    } else if (normalizedTab === 'trending') {
-      andConditions.push({ isTrending: true });
+    } else if (normalizedTab === 'popular' || normalizedTab === 'popular-pick' || normalizedTab === 'popular-picks') {
+      andConditions.push({ isPopularPick: true });
     }
 
     if (parseBoolean(featured) || parseBoolean(bestSeller)) {

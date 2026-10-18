@@ -30,6 +30,7 @@ export const ACTIVITY_ENTITY_TYPES = [
     'WISHLIST',
     'REVIEW',
     'BRAND',
+    'ARTICLE',
 ] as const;
 
 export type ActivityEntityType = (typeof ACTIVITY_ENTITY_TYPES)[number];

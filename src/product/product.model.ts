@@ -50,7 +50,7 @@ export interface IProduct {
   };
   isBestSeller: boolean;
   isNewArrival: boolean;
-  isTrending: boolean;
+  isPopularPick: boolean;
   rating: number;
   numReviews: number;
   media?: MediaAsset[];
@@ -288,7 +288,7 @@ const ProductSchema = new Schema<IProductDocument>(
       default: false,
     },
 
-    isTrending: {
+    isPopularPick: {
       type: Boolean,
       default: false,
     },
@@ -403,7 +403,7 @@ const ProductSchema = new Schema<IProductDocument>(
 
 ProductSchema.index({ isBestSeller: 1 });
 ProductSchema.index({ isNewArrival: 1 });
-ProductSchema.index({ isTrending: 1 });
+ProductSchema.index({ isPopularPick: 1 });
 ProductSchema.index({ brand: 1, category: 1 });
 ProductSchema.index({ availabilityMode: 1, 'preOrder.status': 1 });
 ProductSchema.index({ 'crossSellRecommendations.productId': 1 });

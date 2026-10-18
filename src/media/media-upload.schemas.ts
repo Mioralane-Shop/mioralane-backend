@@ -16,6 +16,7 @@ export const MEDIA_ASSET_TYPES = [
     'combo',
     'campaign',
     'brand-logo',
+    'article',
 ] as const satisfies readonly MediaAssetType[];
 
 /**

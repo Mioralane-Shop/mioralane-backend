@@ -30,6 +30,7 @@ export const MEDIA_FOLDER_BY_TYPE: Record<MediaAssetType, string> = {
   combo: '/mioralane/combos',
   campaign: '/mioralane/campaigns',
   'brand-logo': '/mioralane/brand-logos',
+  article: '/mioralane/articles',
   // Review images are temporarily disabled.
   // review: '/mioralane/reviews',
 };
@@ -38,6 +39,7 @@ const MEDIA_FILENAME_PREFIX_BY_TYPE: Record<MediaAssetType, string> = {
   combo: 'mioralane-combo',
   campaign: 'mioralane-campaign',
   'brand-logo': 'mioralane-brand-logo',
+  article: 'mioralane-article',
   // Review images are temporarily disabled.
   // review: 'mioralane-review',
 };
