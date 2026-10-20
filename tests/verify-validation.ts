@@ -172,7 +172,7 @@ const AUTH_MESSAGE_OVERRIDE = 'Username, email, and password are required';
 const MEDIA_ASSET_TYPE_MESSAGE = 'assetType must be product, combo, campaign, or brand-logo';
 
 /** The exact 400 wordings the auth routes must keep (see auth.routes.ts). */
-const AUTH_REGISTER_MESSAGE = 'Username, email, and password are required';
+const AUTH_REGISTER_MESSAGE = 'Username, email, and a password of at least 8 characters are required';
 const AUTH_LOGIN_MESSAGE = 'Username or email and password are required';
 const GOOGLE_LOGIN_MESSAGE = 'Google credential is required';
 
@@ -263,6 +263,7 @@ const buildApp = (): express.Application => {
         validate({ body: registerUserSchema, message: AUTH_REGISTER_MESSAGE }),
         registerUser,
     );
+    app.post('/auth/register-controller-only', registerUser);
     app.post(
         '/auth/login',
         validate({ body: loginUserSchema, message: AUTH_LOGIN_MESSAGE }),
@@ -2812,17 +2813,17 @@ const checkAuthSchemas = async (url: string): Promise<void> => {
         password: 'short',
     });
     check(
-        'register: schema is shape-only, so a short password still passes Zod (policy is the controller\'s)',
-        shortPasswordViaSchema.status === 200,
+        'register: a short password is refused by Zod (min 8)',
+        shortPasswordViaSchema.status === 400 && shortPasswordViaSchema.body.message === AUTH_REGISTER_MESSAGE && Array.isArray(shortPasswordViaSchema.body.errors) && (shortPasswordViaSchema.body.errors as ValidationIssue[])[0]?.path === 'body.password',
         `status=${shortPasswordViaSchema.status}`,
     );
 
-    const shortPasswordViaController = await postJson(`${url}/auth/register-policy`, {
+    const shortPasswordViaController = await postJson(`${url}/auth/register-controller-only`, {
         ...validRegister,
         password: 'short',
     });
     check(
-        'register: controller still returns its own 400 for a short password',
+        'register: controller keeps its own 400 when the schema is bypassed',
         shortPasswordViaController.status === 400 &&
         shortPasswordViaController.body.message === 'Password must be at least 8 characters',
         `status=${shortPasswordViaController.status} message=${String(shortPasswordViaController.body.message)}`,

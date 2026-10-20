@@ -29,7 +29,7 @@ import { join } from 'node:path';
 import express, { type Request, type Response } from 'express';
 import nodemailer from 'nodemailer';
 import { UserModel } from '../src/auth/user.model';
-import { forgotPasswordSchema, resetPasswordSchema } from '../src/auth/auth.schemas';
+import { forgotPasswordSchema, registerUserSchema, resetPasswordSchema } from '../src/auth/auth.schemas';
 import {
     forgotPassword,
     hashResetToken,
@@ -239,6 +239,15 @@ const main = async (): Promise<void> => {
         strippedReset.success && !('password' in strippedReset.data)
     );
 
+    check(
+        'register-user accepts any 8-character password (no character-class rule)',
+        registerUserSchema.safeParse({ username: 'user', email: 'user@example.com', password: 'abcdefgh' }).success
+    );
+    check(
+        'register-user rejects a 7-character password',
+        !registerUserSchema.safeParse({ username: 'user', email: 'user@example.com', password: 'abcdefg' }).success
+    );
+
     /* 5. per-email rate limit */
     section('Per-email rate limit');
 
@@ -421,6 +430,18 @@ const main = async (): Promise<void> => {
             'the email has the expected recipient and subject',
             mail?.to === 'local@example.com' &&
                 mail?.subject === 'Reset your Mioralane password'
+        );
+
+        const html = mail?.html ?? '';
+        check(
+            'the email uses the absolute logo URL',
+            html.includes(`${resolveFrontendUrl()}/logo/logo_text.png`)
+        );
+        check('the email uses the light grey background', html.includes('background:#f4f4f5'));
+        check('the email button is black', html.includes('background:#111827'));
+        check(
+            'the email footer keeps the security warning',
+            html.includes('If you did not request a password reset')
         );
 
         nextUser = null;

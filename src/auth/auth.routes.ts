@@ -26,7 +26,7 @@ const router = Router();
 // points, which is what it exists to protect.
 router.post(
   '/register',
-  validate({ body: registerUserSchema, message: 'Username, email, and password are required' }),
+  validate({ body: registerUserSchema, message: 'Username, email, and a password of at least 8 characters are required' }),
   requireTurnstile,
   registerUser
 );
