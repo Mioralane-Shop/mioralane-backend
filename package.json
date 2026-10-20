@@ -31,7 +31,8 @@
     "verify:product-filters": "tsx tests/verify-product-filters.ts",
     "verify:brand": "tsx tests/verify-brand.ts",
     "verify:coupon-cancel": "tsx tests/verify-coupon-cancel.ts",
-    "verify:turnstile": "tsx tests/verify-turnstile.ts"
+    "verify:turnstile": "tsx tests/verify-turnstile.ts",
+    "verify:password-reset": "tsx tests/verify-password-reset.ts"
   },
   "dependencies": {
     "@imagekit/nodejs": "^7.11.0",

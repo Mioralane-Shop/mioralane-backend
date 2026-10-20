@@ -2,7 +2,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import { Request, Response } from 'express';
 import { UserModel } from './user.model';
 import { sendPasswordResetEmail } from '../services/email.service';
-import type { ForgotPasswordInput } from './auth.schemas';
+import type { ForgotPasswordInput, ResetPasswordInput } from './auth.schemas';
 
 /**
  * Forgot-password handler.
@@ -51,6 +51,41 @@ export const forgotPassword = async (req: Request, res: Response): Promise<void>
     res.status(200).json({ success: true, message: GENERIC_FORGOT_MESSAGE });
   } catch (error) {
     console.error('[forgotPassword]', error);
+    res.status(500).json({ success: false, message: 'Internal server error' });
+  }
+};
+
+/** POST /api/auth/reset-password */
+export const resetPassword = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const { token, newPassword } = req.body as ResetPasswordInput;
+
+    // `resetPasswordToken` is select:false; ask for it so clearing it below is a
+    // real modification (and therefore an `$unset` on save). The expiry check
+    // is part of the same query, so an expired hash never matches.
+    const user = await UserModel.findOne({
+      resetPasswordToken: hashResetToken(token),
+      resetPasswordExpires: { $gt: new Date() },
+    }).select('+resetPasswordToken');
+
+    if (!user) {
+      res.status(400).json({
+        success: false,
+        message: 'Invalid or expired password reset token',
+      });
+      return;
+    }
+
+    // The model's pre-save hook bcrypt-hashes a modified `password`. Clearing
+    // both reset fields makes the link single-use.
+    user.password = newPassword;
+    user.resetPasswordToken = undefined;
+    user.resetPasswordExpires = undefined;
+    await user.save();
+
+    res.status(200).json({ success: true, message: 'Password reset successfully' });
+  } catch (error) {
+    console.error('[resetPassword]', error);
     res.status(500).json({ success: false, message: 'Internal server error' });
   }
 };

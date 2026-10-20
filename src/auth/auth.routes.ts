@@ -1,7 +1,13 @@
 import { Router, Response, RequestHandler } from 'express';
 import { registerUser, loginUser, logoutUser, googleLogin } from './auth.controller';
-import { forgotPassword } from './password-reset.controller';
-import { forgotPasswordSchema, googleLoginSchema, loginUserSchema, registerUserSchema } from './auth.schemas';
+import { forgotPassword, resetPassword } from './password-reset.controller';
+import {
+  forgotPasswordSchema,
+  googleLoginSchema,
+  loginUserSchema,
+  registerUserSchema,
+  resetPasswordSchema,
+} from './auth.schemas';
 import { validate } from '../middleware/validate.middleware';
 import { forgotPasswordLimiter } from '../middleware/rateLimiter.middleware';
 import { protect, AuthenticatedRequest } from '../middleware/auth.middleware';
@@ -48,6 +54,14 @@ router.post(
   validate({ body: forgotPasswordSchema, message: 'A valid email is required' }),
   forgotPasswordLimiter,
   forgotPassword
+);
+router.post(
+  '/reset-password',
+  validate({
+    body: resetPasswordSchema,
+    message: 'A token and a new password of at least 8 characters are required',
+  }),
+  resetPassword
 );
 
 /**

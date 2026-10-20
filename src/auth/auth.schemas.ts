@@ -51,7 +51,14 @@ export const forgotPasswordSchema = z.object({
     email: z.string().trim().toLowerCase().pipe(z.email()),
 });
 
+/** Reset-password: the new password has a documented eight-character minimum. */
+export const resetPasswordSchema = z.object({
+    token: z.string().min(1),
+    newPassword: z.string().min(8),
+});
+
 export type RegisterUserInput = z.infer<typeof registerUserSchema>;
 export type LoginUserInput = z.infer<typeof loginUserSchema>;
 export type GoogleLoginInput = z.infer<typeof googleLoginSchema>;
 export type ForgotPasswordInput = z.infer<typeof forgotPasswordSchema>;
+export type ResetPasswordInput = z.infer<typeof resetPasswordSchema>;

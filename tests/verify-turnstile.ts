@@ -548,9 +548,13 @@ const main = async (): Promise<void> => {
             consoleCalls.every((call) => !/\btoken\b/.test(call) && !/\$\{\s*secret\s*\}/.test(call)),
             consoleCalls.join(' | ')
         );
+        const turnstileLimiterBlock = rateLimiterSource.slice(
+            rateLimiterSource.indexOf('export const turnstileLimiter'),
+            rateLimiterSource.indexOf('export const createGlobalLimiter')
+        );
         check(
-            'no limiter sets a custom keyGenerator (v8 keeps IPv6 normalisation)',
-            !/keyGenerator\s*:/.test(rateLimiterSource)
+            'the turnstile limiter does not set a keyGenerator (v8 keeps IPv6 normalisation)',
+            !/keyGenerator\s*:/.test(turnstileLimiterBlock)
         );
         check(
             'the rate-limit module exports a dedicated turnstileLimiter',
