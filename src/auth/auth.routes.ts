@@ -1,7 +1,9 @@
 import { Router, Response, RequestHandler } from 'express';
 import { registerUser, loginUser, logoutUser, googleLogin } from './auth.controller';
-import { googleLoginSchema, loginUserSchema, registerUserSchema } from './auth.schemas';
+import { forgotPassword } from './password-reset.controller';
+import { forgotPasswordSchema, googleLoginSchema, loginUserSchema, registerUserSchema } from './auth.schemas';
 import { validate } from '../middleware/validate.middleware';
+import { forgotPasswordLimiter } from '../middleware/rateLimiter.middleware';
 import { protect, AuthenticatedRequest } from '../middleware/auth.middleware';
 import { createCsrfToken, readSessionToken } from '../middleware/csrf-token.middleware';
 import { requireTurnstile } from '../turnstile/turnstile.middleware';
@@ -35,6 +37,18 @@ router.post(
   googleLogin
 );
 router.post('/logout', logoutUser);
+
+// Password reset. Both endpoints are CSRF-exempt (pre-session bootstrap paths,
+// see CSRF_EXEMPT_PATHS). The token never appears in a response body.
+//
+// `forgotPasswordLimiter` is per submitted email (3/hour) and is mounted after
+// `validate` so the body it keys on has already been parsed and normalized.
+router.post(
+  '/forgot-password',
+  validate({ body: forgotPasswordSchema, message: 'A valid email is required' }),
+  forgotPasswordLimiter,
+  forgotPassword
+);
 
 /**
  * GET /me

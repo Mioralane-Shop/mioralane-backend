@@ -42,6 +42,16 @@ export const googleLoginSchema = z.object({
     credential: z.string().min(1),
 });
 
+/**
+ * Forgot-password asks for a real email address and normalizes it before the
+ * lookup. Unlike login, the value cannot be a username, so a format check is
+ * safe here.
+ */
+export const forgotPasswordSchema = z.object({
+    email: z.string().trim().toLowerCase().pipe(z.email()),
+});
+
 export type RegisterUserInput = z.infer<typeof registerUserSchema>;
 export type LoginUserInput = z.infer<typeof loginUserSchema>;
 export type GoogleLoginInput = z.infer<typeof googleLoginSchema>;
+export type ForgotPasswordInput = z.infer<typeof forgotPasswordSchema>;

@@ -104,6 +104,7 @@ const CSRF_EXEMPT_PATHS: readonly string[] = [
     '/api/auth/login',
     '/api/auth/register',
     '/api/auth/google',
+    '/api/auth/forgot-password',
 ];
 
 /**
