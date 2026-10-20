@@ -9,6 +9,10 @@ export interface IUser extends Document {
   avatar?: string;
   authProvider: 'local' | 'google';
   role: 'user' | 'admin';
+  /** SHA-256 hex of the outstanding reset token; the raw token is never stored. */
+  resetPasswordToken?: string;
+  /** When the reset token stops being accepted. */
+  resetPasswordExpires?: Date;
   wishlist: Schema.Types.ObjectId[];
   comboWishlist: Schema.Types.ObjectId[];
   createdAt: Date;
@@ -53,6 +57,17 @@ const userSchema = new Schema<IUser>({
     enum: ['user', 'admin'],
     default: 'user',
   },
+  resetPasswordToken: {
+    type: String,
+    // Only the reset lookup needs this value. `select: false` keeps it out of
+    // every generic user load; the toJSON scrub below is a second layer.
+    select: false,
+    index: true,
+    sparse: true,
+  },
+  resetPasswordExpires: {
+    type: Date,
+  },
   wishlist: {
     type: [
       {
@@ -87,10 +102,10 @@ userSchema.pre('save', async function () {
   this.password = await bcrypt.hash(this.password, salt);
 });
 
-// Strip password when converting to JSON
+// Strip credentials and reset state when converting to JSON
 userSchema.set('toJSON', {
   transform: (_doc, ret) => {
-    const { password, __v, ...rest } = ret;
+    const { password, resetPasswordToken, resetPasswordExpires, __v, ...rest } = ret;
     return rest;
   },
 });
