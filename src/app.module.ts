@@ -27,6 +27,7 @@ import {
   announcementPublicRoutes,
 } from './announcement/announcement.routes';
 import { adminMegaMenuRoutes, megaMenuPublicRoutes } from './mega-menu/mega-menu.routes';
+import { adminInstagramRoutes, instagramPublicRoutes } from './instagram/instagram.routes';
 import { adminBrandRoutes, brandPublicRoutes } from './brand/brand.routes';
 import { adminBlogRoutes, blogPublicRoutes } from './blog/blog.routes';
 import reviewRoutes from './review/review.routes';
@@ -260,6 +261,11 @@ const createApp = (options: CreateAppOptions = {}): express.Application => {
   // Storefront "Shop" mega menu (desktop navbar panel) — curation-only singleton
   app.use('/api/admin/mega-menu', adminMegaMenuRoutes);
   app.use('/api/mega-menu', megaMenuPublicRoutes);
+
+  // Instagram feed — backend-only sync from the Meta Graph API + the admin's
+  // homepage selection (media rows + a selection singleton).
+  app.use('/api/admin/instagram', adminInstagramRoutes);
+  app.use('/api/instagram/feed', instagramPublicRoutes);
 
   // Storefront brands — CRUD, one document per brand, curated from the admin app
   app.use('/api/admin/brands', adminBrandRoutes);

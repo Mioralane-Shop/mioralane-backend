@@ -48,6 +48,13 @@ export const validate = (config: Record<string, unknown>) => {
     IMAGEKIT_URL_ENDPOINT: Joi.string().uri().required(),
     IMAGEKIT_PUBLIC_KEY: Joi.string().required(),
     IMAGEKIT_PRIVATE_KEY: Joi.string().required(),
+    // ── Instagram (Meta Graph API) ──────────────────────────────────────────
+    // Optional on purpose: when absent (or still the placeholder shipped in
+    // .env.example), the integration is disabled — the API boots normally and
+    // the sync endpoint answers 403 `instagram_not_configured`. The values are
+    // read (and never logged) by src/instagram/instagram.service.ts only.
+    INSTAGRAM_ACCESS_TOKEN: Joi.string().optional(),
+    INSTAGRAM_ACCOUNT_ID: Joi.string().optional(),
     // ── P0-5 security tuning ──────────────────────────────────────────────
     // Optional, and documented rather than enforced here: the return value of
     // `validate()` is discarded by both callers, so a Joi `.default()` would never
