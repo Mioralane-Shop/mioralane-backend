@@ -171,3 +171,11 @@ jobs:
       # negative control that shows the schema is what produces the 400.
       - name: Verify Turnstile verification
         run: npm run verify:turnstile
+
+      # Password reset. SHA-256-only storage and the one-hour TTL, the link
+      # shape, the request schemas, the real per-email limiter driven to its
+      # trip point, and the controller's identical 200 body for unknown,
+      # Google-only and successful requests (UserModel.findOne stubbed; the
+      # mailer transport is stubbed too, so no database or network is needed).
+      - name: Verify password reset
+        run: npm run verify:password-reset

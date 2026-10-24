@@ -31,10 +31,11 @@
     "verify:product-filters": "tsx tests/verify-product-filters.ts",
     "verify:brand": "tsx tests/verify-brand.ts",
     "verify:coupon-cancel": "tsx tests/verify-coupon-cancel.ts",
-    "verify:turnstile": "tsx tests/verify-turnstile.ts"
+    "verify:turnstile": "tsx tests/verify-turnstile.ts",
+    "verify:password-reset": "tsx tests/verify-password-reset.ts"
   },
   "dependencies": {
-    "@imagekit/nodejs": "^7.11.0",
+    "@imagekit/nodejs": "^7.12.1",
     "bcryptjs": "^3.0.3",
     "cookie-parser": "^1.4.7",
     "cors": "^2.8.6",
@@ -47,6 +48,7 @@
     "jsonwebtoken": "^9.0.3",
     "mongoose": "^9.9.1",
     "multer": "^2.4.0",
+    "nodemailer": "^10.1.7",
     "swagger-jsdoc": "^6.3.0",
     "swagger-ui-express": "^5.0.1",
     "tsconfig-paths": "^4.2.0",
@@ -60,6 +62,7 @@
     "@types/jsonwebtoken": "^9.0.10",
     "@types/multer": "^2.3.0",
     "@types/node": "^22.10.2",
+    "@types/nodemailer": "^8.0.2",
     "@types/swagger-jsdoc": "^6.0.4",
     "@types/swagger-ui-express": "^4.1.8",
     "tsx": "^4.23.9",
