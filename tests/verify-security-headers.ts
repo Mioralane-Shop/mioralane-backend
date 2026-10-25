@@ -452,8 +452,10 @@ const main = async (): Promise<void> => {
     );
 
     // IPv6: the default key generator masks to the /56 subnet, so one allocation
-    // cannot be used to multiply a bucket. No custom keyGenerator is configured,
-    // which is what keeps this property (see the rate limiter's module note).
+    // cannot be used to multiply a bucket. The IP-keyed limiters configure no
+    // keyGenerator, which is what keeps this property. The one custom generator
+    // (forgot-password) keys on the submitted email, not the IP, so it neither
+    // needs nor bypasses ipKeyGenerator.
     const subnetA = ipKeyGenerator('2001:db8:0:0::1');
     const subnetB = ipKeyGenerator('2001:db8:0:0::99');
     const subnetOther = ipKeyGenerator('2001:db8:1:0::1');
@@ -800,10 +802,17 @@ const main = async (): Promise<void> => {
         appModule.includes('apiDocsHandlers.length > 0'),
         'the /api/docs mount is unconditional'
     );
+    const keyGeneratorSites = rateLimiterSource.match(/keyGenerator\s*:/g) ?? [];
+
     check(
-        'no limiters set a custom keyGenerator (so v8 keeps IPv6 normalisation)',
-        !/keyGenerator\s*:/.test(rateLimiterSource),
-        'a custom keyGenerator would bypass ipKeyGenerator'
+        'only the per-email forgot-password limiter sets a keyGenerator',
+        keyGeneratorSites.length === 1,
+        `${keyGeneratorSites.length} custom keyGenerator site(s) found`
+    );
+    check(
+        'no custom keyGenerator reads the request IP (so IP-keyed limiters keep v8 IPv6 normalisation)',
+        !/req\.ip|request\.ip/.test(rateLimiterSource),
+        'a custom keyGenerator reads the request IP without ipKeyGenerator'
     );
     check(
         "the audit log no longer reads raw X-Forwarded-For (spoofable, and now redundant)",

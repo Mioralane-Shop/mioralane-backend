@@ -127,6 +127,65 @@ export const authLimiter = rateLimit({
     },
 });
 
+/** Forgot-password tier: 3 requests per hour per submitted email address. */
+export const FORGOT_PASSWORD_LIMIT = {
+    windowMs: 60 * 60 * 1000,
+    limit: 3,
+} as const;
+
+/**
+ * Per-email bucket for `POST /api/auth/forgot-password`.
+ *
+ * Keyed by the submitted address rather than the caller's IP, because the rule
+ * is "3 requests per email per hour": rotating IPs must not reset the bucket.
+ * Mounted AFTER `validate`, so `req.body.email` is present and already trimmed
+ * and lower-cased; a malformed body is refused by the schema before it reaches
+ * this limiter. The fallback key only matters if the limiter is ever mounted
+ * earlier, and is deliberately shared rather than IP-derived.
+ */
+export const forgotPasswordLimiter = rateLimit({
+    windowMs: FORGOT_PASSWORD_LIMIT.windowMs,
+    limit: FORGOT_PASSWORD_LIMIT.limit,
+    standardHeaders: true,
+    legacyHeaders: false,
+    keyGenerator: (req: Request): string => {
+        const body = req.body as { email?: unknown } | undefined;
+        const email = typeof body?.email === 'string' ? body.email : '';
+
+        return email ? `email:${email}` : 'email:missing';
+    },
+    message: {
+        success: false,
+        message: 'Too many reset requests for this email. Please try again later.',
+    },
+});
+
+/** Turnstile tier: 20 requests / minute / IP. */
+export const TURNSTILE_LIMIT = {
+    windowMs: 1 * 60 * 1000,
+    limit: 20,
+} as const;
+
+/**
+ * Dedicated limiter for `POST /api/verify-turnstile`.
+ *
+ * Separate from {@link authLimiter} on purpose. `authLimiter` is ONE bucket
+ * shared by every `/api/auth/*` request, so mounting it here would let a burst
+ * of verification calls lock out logins (and the reverse). This endpoint is
+ * public and pre-session; it gets its own small ceiling. Like the other two it
+ * sets no `keyGenerator`, so express-rate-limit v8 keeps IPv6 normalisation.
+ */
+export const turnstileLimiter = rateLimit({
+    windowMs: TURNSTILE_LIMIT.windowMs,
+    limit: TURNSTILE_LIMIT.limit,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: {
+        success: false,
+        message: 'Too many requests — please try again in a minute',
+    },
+});
+
 /**
  * Broad flood control, mounted on every route.
  *

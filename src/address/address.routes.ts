@@ -10,6 +10,7 @@ import {
     updateMyAddress,
 } from './address.controller';
 import { createAddressSchema, updateAddressSchema } from './address.schemas';
+import { requireTurnstile } from '../turnstile/turnstile.middleware';
 import { objectIdParam } from '../utils/validation';
 
 const router = Router();
@@ -21,6 +22,7 @@ router.post(
     '/',
     protect as RequestHandler,
     validate({ body: createAddressSchema }),
+    requireTurnstile,
     createMyAddress as RequestHandler
 );
 /*

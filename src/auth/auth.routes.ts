@@ -1,31 +1,68 @@
 import { Router, Response, RequestHandler } from 'express';
 import { registerUser, loginUser, logoutUser, googleLogin } from './auth.controller';
-import { googleLoginSchema, loginUserSchema, registerUserSchema } from './auth.schemas';
+import { forgotPassword, resetPassword } from './password-reset.controller';
+import {
+  forgotPasswordSchema,
+  googleLoginSchema,
+  loginUserSchema,
+  registerUserSchema,
+  resetPasswordSchema,
+} from './auth.schemas';
 import { validate } from '../middleware/validate.middleware';
+import { forgotPasswordLimiter } from '../middleware/rateLimiter.middleware';
 import { protect, AuthenticatedRequest } from '../middleware/auth.middleware';
 import { createCsrfToken, readSessionToken } from '../middleware/csrf-token.middleware';
+import { requireTurnstile } from '../turnstile/turnstile.middleware';
 import { UserModel } from './user.model';
 
 const router = Router();
 
 // Messages are overridden per route so every existing 400 keeps its exact
 // wording. Status codes and the response envelope are unchanged.
+//
+// `requireTurnstile` is mounted immediately before each handler — after
+// `validate`, so a malformed body is still answered by the schema (see the
+// middleware's ordering note). These three routes are the credential-entry
+// points, which is what it exists to protect.
 router.post(
   '/register',
   validate({ body: registerUserSchema, message: 'Username, email, and password are required' }),
+  requireTurnstile,
   registerUser
 );
 router.post(
   '/login',
   validate({ body: loginUserSchema, message: 'Username or email and password are required' }),
+  requireTurnstile,
   loginUser
 );
 router.post(
   '/google',
   validate({ body: googleLoginSchema, message: 'Google credential is required' }),
+  requireTurnstile,
   googleLogin
 );
 router.post('/logout', logoutUser);
+
+// Password reset. Both endpoints are CSRF-exempt (pre-session bootstrap paths,
+// see CSRF_EXEMPT_PATHS). The token never appears in a response body.
+//
+// `forgotPasswordLimiter` is per submitted email (3/hour) and is mounted after
+// `validate` so the body it keys on has already been parsed and normalized.
+router.post(
+  '/forgot-password',
+  validate({ body: forgotPasswordSchema, message: 'A valid email is required' }),
+  forgotPasswordLimiter,
+  forgotPassword
+);
+router.post(
+  '/reset-password',
+  validate({
+    body: resetPasswordSchema,
+    message: 'A token and a new password of at least 8 characters are required',
+  }),
+  resetPassword
+);
 
 /**
  * GET /me

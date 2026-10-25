@@ -24,7 +24,7 @@ export const createWishlistError = (
 
 // Same projections as the original wishlist endpoint.
 const wishlistProductSelect =
-    'title slug brand category description skinType skinConcern price salePrice badge images hoverImage volume stock lowStockThreshold availabilityMode preOrder isBestSeller isNewArrival isTrending rating numReviews createdAt updatedAt';
+    'title slug brand category description skinType skinConcern price salePrice badge images hoverImage volume stock lowStockThreshold availabilityMode preOrder isBestSeller isNewArrival isPopularPick rating numReviews createdAt updatedAt';
 
 const wishlistComboSelect =
     'title slug badge description price compareAtPrice savings includedItems routineTag category brand images hoverImage size volume stock rating numReviews concerns skinType isBestSeller isNewArrival createdAt updatedAt';

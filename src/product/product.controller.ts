@@ -13,6 +13,7 @@ import {
 } from '../middleware/error.middleware';
 import { normalizeOptionalLowStockThreshold } from '../inventory/inventory.service';
 import { applyCatalogStockChange } from '../inventory/inventory-transaction.service';
+import { normalizeVolume } from './product-volume';
 import {
   buildActivityChanges,
   pickActivitySnapshot,
@@ -32,6 +33,7 @@ import {
 /** Fields kept in activity snapshots — keeps audit rows small and readable. */
 const PRODUCT_AUDIT_FIELDS = [
   'title',
+  'shortName',
   'slug',
   'brand',
   'category',
@@ -53,6 +55,8 @@ interface ProductQueryParams {
   skinType?: string;
   skinConcern?: string;
   concern?: string;
+  /** Matches the full ingredient list or any key-ingredient name. */
+  ingredient?: string;
   search?: string;
   sort?: string;
   featured?: string;
@@ -69,6 +73,7 @@ type ProductMutationBody = Partial<
   Pick<
     IProduct,
     | 'title'
+    | 'shortName'
     | 'slug'
     | 'brand'
     | 'category'
@@ -91,13 +96,14 @@ type ProductMutationBody = Partial<
     | 'preOrder'
     | 'isBestSeller'
     | 'isNewArrival'
-    | 'isTrending'
+    | 'isPopularPick'
     | 'crossSellRecommendations'
   >
 >;
 
 const mutationFields: (keyof ProductMutationBody)[] = [
   'title',
+  'shortName',
   'slug',
   'brand',
   'category',
@@ -120,7 +126,7 @@ const mutationFields: (keyof ProductMutationBody)[] = [
   'preOrder',
   'isBestSeller',
   'isNewArrival',
-  'isTrending',
+  'isPopularPick',
   'crossSellRecommendations',
 ];
 
@@ -225,6 +231,14 @@ const normalizeInventoryFields = (body: ProductMutationBody): void => {
 
   if (normalizedThreshold !== undefined) {
     body.lowStockThreshold = normalizedThreshold;
+  }
+
+  // Applied here as well as in the admin form, so a payload from an older admin bundle
+  // or from curl cannot store the un-normalized shape either.
+  const rawVolume = (body as Record<string, unknown>).volume;
+
+  if (rawVolume !== undefined) {
+    body.volume = normalizeVolume(rawVolume) as string;
   }
 };
 
@@ -343,6 +357,33 @@ const buildExactMatchCondition = (
   };
 };
 
+/**
+ * Substring match against the free-text ingredient list and against each
+ * key-ingredient name. A product carries `ingredients` as a paragraph and
+ * `keyIngredients` as `{name, benefit}` rows, so both are checked. `$in` with
+ * RegExp values matches any of the supplied terms (OR), mirroring how
+ * brand/category treat a comma-separated list.
+ *
+ * Exported so `tests/verify-product-filters.ts` can assert the built condition
+ * directly: the endpoint cannot be exercised without a database.
+ */
+export const buildIngredientCondition = (values: string[]): Record<string, unknown> | null => {
+  const uniqueValues = Array.from(new Set(values.map((value) => value.trim()).filter(Boolean)));
+
+  if (uniqueValues.length === 0) {
+    return null;
+  }
+
+  const patterns = uniqueValues.map((value) => new RegExp(escapeRegex(value), 'i'));
+
+  return {
+    $or: [
+      { ingredients: { $in: patterns } },
+      { 'keyIngredients.name': { $in: patterns } },
+    ],
+  };
+};
+
 const buildSearchCondition = (search?: string): Record<string, unknown> | null => {
   const query = search?.trim();
   if (!query) return null;
@@ -350,8 +391,11 @@ const buildSearchCondition = (search?: string): Record<string, unknown> | null =
   const regex = new RegExp(escapeRegex(query), 'i');
 
   return {
+    // Both names are searched: a customer typing what the card showed matches
+    // `shortName`, and one typing the full title matches `title`.
     $or: [
       { title: regex },
+      { shortName: regex },
       { brand: regex },
       { category: regex },
       { description: regex },
@@ -369,9 +413,18 @@ const formatProduct = (product: ProductAggregateRow): ProductAggregateRow => {
   delete formatted.currentPrice;
 
   formatted.name = formatted.title;
+  // The same rule as the model's `toJSON`: an empty short name resolves to the title,
+  // so the list path never hands a client `shortName: undefined`.
+  formatted.shortName = formatted.shortName || formatted.title;
   formatted.concerns = formatted.skinConcern;
   formatted.reviewCount = formatted.numReviews;
   formatted.description = formatted.description || '';
+  // Aggregate results do not apply Mongoose defaults, so a product stored before a
+  // flag existed would otherwise be returned as `undefined`. Both flags are booleans
+  // in the API contract, and `false` is the safe value for a missing flag.
+  formatted.isBestSeller = Boolean(formatted.isBestSeller);
+  formatted.isNewArrival = Boolean(formatted.isNewArrival);
+  formatted.isPopularPick = Boolean(formatted.isPopularPick);
 
   if (formatted.isBestSeller || formatted.badge === 'Best') {
     formatted.tag = 'best';
@@ -477,7 +530,7 @@ const formatProduct = (product: ProductAggregateRow): ProductAggregateRow => {
  *               isNewArrival:
  *                 type: boolean
  *                 default: false
- *               isTrending:
+ *               isPopularPick:
  *                 type: boolean
  *                 default: false
  *               rating:
@@ -1024,13 +1077,13 @@ export const getCartRecommendations = async (req: Request, res: Response): Promi
  *   get:
  *     tags: [Products]
  *     summary: Get paginated list of products
- *     description: Query products with optional filters — tab, brand, category, skinType, skinConcern, search.
+ *     description: Query products with optional filters — tab, brand, category, skinType, skinConcern, ingredient, search.
  *     parameters:
  *       - in: query
  *         name: tab
  *         schema:
  *           type: string
- *           enum: [bestseller, new, trending]
+ *           enum: [bestseller, new, popular]
  *         description: Filter by product tab
  *       - in: query
  *         name: brand
@@ -1052,6 +1105,11 @@ export const getCartRecommendations = async (req: Request, res: Response): Promi
  *         schema:
  *           type: string
  *         description: Filter by skin concern (e.g. Acne)
+ *       - in: query
+ *         name: ingredient
+ *         schema:
+ *           type: string
+ *         description: Comma-separated ingredients — matches the ingredient list or any key-ingredient name (e.g. Snail Mucin)
  *       - in: query
  *         name: search
  *         schema:
@@ -1102,6 +1160,7 @@ export const getProducts = async (req: Request, res: Response): Promise<void> =>
       skinType,
       skinConcern,
       concern,
+      ingredient,
       search,
       sort,
       featured,
@@ -1125,8 +1184,8 @@ export const getProducts = async (req: Request, res: Response): Promise<void> =>
       andConditions.push({ isBestSeller: true });
     } else if (normalizedTab === 'new') {
       andConditions.push({ isNewArrival: true });
-    } else if (normalizedTab === 'trending') {
-      andConditions.push({ isTrending: true });
+    } else if (normalizedTab === 'popular' || normalizedTab === 'popular-pick' || normalizedTab === 'popular-picks') {
+      andConditions.push({ isPopularPick: true });
     }
 
     if (parseBoolean(featured) || parseBoolean(bestSeller)) {
@@ -1149,6 +1208,9 @@ export const getProducts = async (req: Request, res: Response): Promise<void> =>
     const concernValues = [...splitCsv(skinConcern), ...splitCsv(concern)];
     const concernCondition = buildExactMatchCondition('skinConcern', concernValues);
     if (concernCondition) andConditions.push(concernCondition);
+
+    const ingredientCondition = buildIngredientCondition(splitCsv(ingredient));
+    if (ingredientCondition) andConditions.push(ingredientCondition);
 
     const searchCondition = buildSearchCondition(search);
     if (searchCondition) andConditions.push(searchCondition);

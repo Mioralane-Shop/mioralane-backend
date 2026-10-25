@@ -8,6 +8,7 @@ import {
     getProductReviewList,
 } from './review.controller';
 import { createReviewSchema } from './review.schemas';
+import { requireTurnstile } from '../turnstile/turnstile.middleware';
 import { objectIdParam } from '../utils/validation';
 
 const router = Router();
@@ -25,6 +26,7 @@ router.post(
     '/',
     protect as RequestHandler,
     validate({ body: createReviewSchema }),
+    requireTurnstile,
     createReview as RequestHandler
 );
 router.get('/me', protect as RequestHandler, getMyReviews as RequestHandler);

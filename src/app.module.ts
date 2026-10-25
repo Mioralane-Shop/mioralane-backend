@@ -26,6 +26,9 @@ import {
   adminAnnouncementRoutes,
   announcementPublicRoutes,
 } from './announcement/announcement.routes';
+import { adminMegaMenuRoutes, megaMenuPublicRoutes } from './mega-menu/mega-menu.routes';
+import { adminBrandRoutes, brandPublicRoutes } from './brand/brand.routes';
+import { adminBlogRoutes, blogPublicRoutes } from './blog/blog.routes';
 import reviewRoutes from './review/review.routes';
 import adminReviewRoutes from './review/admin-review.routes';
 import helmet from 'helmet';
@@ -34,9 +37,11 @@ import {
   createGlobalLimiter,
   createWriteLimiter,
   readRateLimitSettings,
+  turnstileLimiter,
 } from './middleware/rateLimiter.middleware';
 import { csrfOriginGuard } from './middleware/csrf.middleware';
 import { CSRF_HEADER, csrfTokenGuard } from './middleware/csrf-token.middleware';
+import { TURNSTILE_TOKEN_HEADER } from './turnstile/turnstile.middleware';
 import { stripMongoOperators } from './middleware/strip-mongo-operators.middleware';
 import {
   CorsOriginDeniedError,
@@ -50,6 +55,7 @@ import {
   createApiDocsHandlers,
   handleOpenApiJson,
 } from './swagger';
+import { turnstileRoutes } from './turnstile/turnstile.routes';
 
 /**
  * Options for {@link createApp}.
@@ -133,11 +139,12 @@ const createApp = (options: CreateAppOptions = {}): express.Application => {
       },
       credentials: true,
       methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-      // `CSRF_HEADER` must be here or the browser's preflight refuses every
-      // state-changing request before it is even sent — a failure that looks
-      // nothing like a CSRF error. Imported rather than spelled out so the
-      // browser contract cannot drift from the header the guard reads.
-      allowedHeaders: ['Content-Type', 'Authorization', CSRF_HEADER],
+      // `CSRF_HEADER` and `TURNSTILE_TOKEN_HEADER` must be here or the browser's
+      // preflight refuses every state-changing request before it is even sent —
+      // a failure that looks nothing like a CSRF or Turnstile error. Both are
+      // imported rather than spelled out so the browser contract cannot drift
+      // from the headers the guards read.
+      allowedHeaders: ['Content-Type', 'Authorization', CSRF_HEADER, TURNSTILE_TOKEN_HEADER],
       // Let the browser reuse a preflight result for a day instead of sending
       // one before every write. Without this, a preflight per request would
       // double the traffic the write limiter does not charge for.
@@ -249,7 +256,19 @@ const createApp = (options: CreateAppOptions = {}): express.Application => {
   // Storefront announcement bar (top ticker) — managed from its own admin menu
   app.use('/api/admin/announcement', adminAnnouncementRoutes);
   app.use('/api/announcements', announcementPublicRoutes);
+
+  // Storefront "Shop" mega menu (desktop navbar panel) — curation-only singleton
+  app.use('/api/admin/mega-menu', adminMegaMenuRoutes);
+  app.use('/api/mega-menu', megaMenuPublicRoutes);
+
+  // Storefront brands — CRUD, one document per brand, curated from the admin app
+  app.use('/api/admin/brands', adminBrandRoutes);
+  app.use('/api/brands', brandPublicRoutes);
   app.use('/api/shipping', shippingRoutes);
+
+  // Blog articles — published storefront feed + admin editorial CRUD
+  app.use('/api/admin/blog', adminBlogRoutes);
+  app.use('/api/blog', blogPublicRoutes);
 
   // Wishlist routes (authenticated user flow)
   app.use('/api/wishlist', wishlistRoutes);
@@ -262,6 +281,11 @@ const createApp = (options: CreateAppOptions = {}): express.Application => {
 
   // Review moderation (admin only)
   app.use('/api/admin/reviews', adminReviewRoutes);
+
+  // Cloudflare Turnstile verification (public) — rate-limited bot protection for
+  // the login/register/checkout flows. Public on purpose: it is reached before a
+  // caller holds any session, and it stores nothing of its own.
+  app.use('/api/verify-turnstile', turnstileLimiter, turnstileRoutes);
 
   // Real reusable media upload/delete routes for product and combo assets
   app.use('/api/media', mediaRoutes);

@@ -54,7 +54,7 @@ src/
 
 ## Models (Mongoose)
 - **User** (`auth/user.model.ts`): password auto-hashed in `pre('save')`; token payload `{ id, role: 'user'|'admin' }`.
-- **Product** (`product/product.model.ts`): title, slug, brand, category, description, skinType, skinConcern, price, salePrice, badge, images, hoverImage, volume, stock, isBestSeller, isNewArrival, isTrending.
+- **Product** (`product/product.model.ts`): title, slug, brand, category, description, skinType, skinConcern, price, salePrice, badge, images, hoverImage, volume, stock, isBestSeller, isNewArrival, isPopularPick.
 - **Combo** (`combo/combo.model.ts`): title, slug, badge, description, price, compareAtPrice, savings, includedItems, routineTag, category, brand, images, size, volume, stock, rating, numReviews, concerns, skinType, isBestSeller, isNewArrival. `toJSON` transform aliases fields for frontend `ProductCard` compatibility.
 - **Order** (`order/order.model.ts`).
 

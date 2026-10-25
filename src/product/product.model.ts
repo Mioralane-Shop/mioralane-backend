@@ -12,6 +12,12 @@ const integerStockValidator = {
 
 export interface IProduct {
   title: string;
+  /**
+   * The name shown wherever the product appears in a list — cards, grids, search
+   * results, cart and wishlist rows. OPTIONAL: absent or empty means "use `title`",
+   * which is what the serializers resolve and what the storefront relies on.
+   */
+  shortName?: string;
   slug: string;
   brand: string;
   category: string;
@@ -44,7 +50,7 @@ export interface IProduct {
   };
   isBestSeller: boolean;
   isNewArrival: boolean;
-  isTrending: boolean;
+  isPopularPick: boolean;
   rating: number;
   numReviews: number;
   media?: MediaAsset[];
@@ -68,7 +74,25 @@ const ProductSchema = new Schema<IProductDocument>(
       type: String,
       required: [true, 'Product title is required'],
       trim: true,
-      maxlength: [200, 'Title cannot exceed 200 characters'],
+      // 150, matching the request schema exactly, because the limit counts every
+      // character including spaces. The longest stored title is 78 characters, so this
+      // is both the visible limit and the stored bound.
+      maxlength: [150, 'Title cannot exceed 150 characters'],
+    },
+
+    /**
+     * The name on cards and every other compact listing.
+     *
+     * OPTIONAL, and that is the point: empty means "use `title`", so a product whose
+     * card name matches its full name never needs this filled in — and a stored copy
+     * cannot go stale when the title is edited. The API caps it at 60 characters
+     * (`SHORT_NAME_MAX_CHARS`); the schema stays looser so a longer legacy value
+     * cannot make an unrelated save fail.
+     */
+    shortName: {
+      type: String,
+      trim: true,
+      maxlength: [200, 'Short name cannot exceed 200 characters'],
     },
 
     slug: {
@@ -95,19 +119,27 @@ const ProductSchema = new Schema<IProductDocument>(
     description: {
       type: String,
       default: '',
-      maxlength: [2000, 'Description cannot exceed 2000 characters'],
+      // 500, matching `DESCRIPTION_MAX_CHARS` in the request schema. The longest stored
+      // description is 345 characters, so nothing in the catalogue is affected.
+      maxlength: [500, 'Description cannot exceed 500 characters'],
     },
 
     ingredients: {
       type: String,
       trim: true,
       default: undefined,
+      // 1000, matching `INGREDIENTS_MAX_CHARS` in the request schema. This field had no ceiling
+      // of its own before, which was only safe while the schema capped it; the bound belongs
+      // here too so the model cannot accept what the API refuses. Longest stored value: 823.
+      maxlength: [1000, 'Ingredients cannot exceed 1000 characters'],
     },
 
     howToUse: {
       type: String,
       trim: true,
       default: undefined,
+      // 300, matching `HOW_TO_USE_MAX_CHARS` in the request schema. Longest stored value: 207.
+      maxlength: [300, 'How to use cannot exceed 300 characters'],
     },
 
     keyIngredients: {
@@ -256,7 +288,7 @@ const ProductSchema = new Schema<IProductDocument>(
       default: false,
     },
 
-    isTrending: {
+    isPopularPick: {
       type: Boolean,
       default: false,
     },
@@ -314,6 +346,10 @@ const ProductSchema = new Schema<IProductDocument>(
 
         // ── Field aliases for frontend ProductCard compatibility ──
         r.name = r.title;                             // ProductCard renders product.name
+        // An empty `shortName` means "use the title". Resolved here so no consumer has
+        // to know the rule, and so a card is never handed `undefined` and printing
+        // nothing at all.
+        r.shortName = r.shortName || r.title;
         r.concerns = r.skinConcern;                   // ProductCard renders product.concerns
         r.reviewCount = r.numReviews;                 // ProductCard expects reviewCount
         r.description = r.description || '';          // ensure string
@@ -367,7 +403,7 @@ const ProductSchema = new Schema<IProductDocument>(
 
 ProductSchema.index({ isBestSeller: 1 });
 ProductSchema.index({ isNewArrival: 1 });
-ProductSchema.index({ isTrending: 1 });
+ProductSchema.index({ isPopularPick: 1 });
 ProductSchema.index({ brand: 1, category: 1 });
 ProductSchema.index({ availabilityMode: 1, 'preOrder.status': 1 });
 ProductSchema.index({ 'crossSellRecommendations.productId': 1 });
