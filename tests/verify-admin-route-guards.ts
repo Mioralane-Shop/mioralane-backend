@@ -351,12 +351,35 @@ const collectMounts = (): Array<{ path: string; args: string }> => {
         .filter((entry): entry is { path: string; args: string } => entry !== null);
 };
 
+/**
+ * Intentionally PUBLIC routes mounted under `/api/admin`.
+ *
+ * They are session-bootstrap endpoints: the request either requests the OTP or
+ * issues the session itself, so no session — and therefore no guard — can
+ * exist yet. Declared explicitly (with a reason) instead of loosening the
+ * rule, exactly like check A2's `publicExceptions`: any OTHER unguarded route
+ * under `/api/admin` still fails, and a stale entry is itself a failure.
+ */
+const ADMIN_PUBLIC_BOOTSTRAP_EXCEPTIONS: Array<{ method: string; path: string; reason: string }> = [
+    {
+        method: 'POST',
+        path: '/api/admin/auth/login',
+        reason: 'admin 2FA bootstrap — validates credentials and requests an OTP, before any session exists',
+    },
+    {
+        method: 'POST',
+        path: '/api/admin/auth/verify-otp',
+        reason: 'admin 2FA bootstrap — this request issues the session, so no session (and no guard) can exist yet',
+    },
+];
+
 /** Check A — every route mounted under /api/admin is guarded. */
 const checkAdminGuardCoverage = (routers: RouterInfo[]): void => {
     const importedRouters = collectImportedRouters(routers);
     const mounts = collectMounts();
     const rows: string[] = [];
     let adminRouteCount = 0;
+    const matchedExceptions = new Set<string>();
 
     for (const mount of mounts) {
         for (const [localName, router] of importedRouters) {
@@ -389,8 +412,19 @@ const checkAdminGuardCoverage = (routers: RouterInfo[]): void => {
                         `${route.method.padEnd(6)} ${fullPath.padEnd(42)} ${source.padEnd(18)} [${shortPath(route.file)}]`,
                     );
 
+
                     if (source === 'NONE') {
-                        fail(`unguarded admin route: ${route.method} ${fullPath} (${shortPath(route.file)})`);
+                        const exception = ADMIN_PUBLIC_BOOTSTRAP_EXCEPTIONS.find(
+                            (entry) => entry.method === route.method && entry.path === fullPath,
+                        );
+
+                        if (exception) {
+                            matchedExceptions.add(`${exception.method} ${exception.path}`);
+                        } else {
+                            fail(
+                                `unguarded admin route: ${route.method} ${fullPath} (${shortPath(route.file)})`,
+                            );
+                        }
                     }
                 }
 
@@ -404,6 +438,19 @@ const checkAdminGuardCoverage = (routers: RouterInfo[]): void => {
                     fail(`reversed guard order: ${route.method} ${fullPath} (${shortPath(route.file)})`);
                 }
             }
+        }
+    }
+
+
+    // Every declared exception must still match a real, unguarded route — a
+    // stale entry (or an entry that has since been guarded) is itself a failure.
+    for (const exception of ADMIN_PUBLIC_BOOTSTRAP_EXCEPTIONS) {
+        const key = `${exception.method} ${exception.path}`;
+
+        if (!matchedExceptions.has(key)) {
+            fail(
+                `stale admin bootstrap exception — route not found unguarded: ${key} (${exception.reason})`,
+            );
         }
     }
 

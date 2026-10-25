@@ -16,7 +16,6 @@ import {
 
 const JWT_SECRET = process.env.JWT_SECRET;
 const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '7d';
-const ADMIN_JWT_EXPIRES_IN = process.env.ADMIN_JWT_EXPIRES_IN || '1h';
 const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || '';
 const DEFAULT_COOKIE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 const MIN_PASSWORD_LENGTH = 8;
@@ -53,15 +52,20 @@ const resolveCookieMaxAge = (expiresIn: string): number => {
 /**
  * Role-scoped session lifetime (P0-1.4).
  *
- * Admins get a short session (`ADMIN_JWT_EXPIRES_IN`, default 1h); customers
- * keep the long-lived `JWT_EXPIRES_IN`, so the storefront UX is unchanged.
+ * Admins get a FIXED 2-hour session (7200 seconds, hardcoded — deliberately
+ * not env-tunable); customers keep the long-lived `JWT_EXPIRES_IN`, so the
+ * storefront UX is unchanged.
  * Security does not rest on expiry alone, because `protect` re-reads the
  * account's role from MongoDB on every request.
  */
-const resolveSessionTtl = (role: UserRole): { expiresIn: string; maxAgeMs: number } => {
-  const expiresIn = role === 'admin' ? ADMIN_JWT_EXPIRES_IN : JWT_EXPIRES_IN;
+export const resolveSessionTtl = (role: UserRole): { expiresIn: string; maxAgeMs: number } => {
+  // Admin lifetime is FIXED at 2 hours (7200 s) — hardcoded so the JWT `exp`
+  // and the cookie `maxAge` can never drift from the policy.
+  if (role === 'admin') {
+    return { expiresIn: '2h', maxAgeMs: 2 * 60 * 60 * 1000 };
+  }
 
-  return { expiresIn, maxAgeMs: resolveCookieMaxAge(expiresIn) };
+  return { expiresIn: JWT_EXPIRES_IN, maxAgeMs: resolveCookieMaxAge(JWT_EXPIRES_IN) };
 };
 
 /**
@@ -72,7 +76,7 @@ const resolveSessionTtl = (role: UserRole): { expiresIn: string; maxAgeMs: numbe
  * `maxAgeMs` is always derived from the same TTL used to sign the token, so the
  * cookie can never outlive (or under-live) the JWT it carries.
  */
-const setAuthCookie = (res: Response, token: string, maxAgeMs: number): void => {
+export const setAuthCookie = (res: Response, token: string, maxAgeMs: number): void => {
   const isProduction = process.env.NODE_ENV === 'production';
 
   res.cookie('token', token, {
@@ -87,7 +91,7 @@ const setAuthCookie = (res: Response, token: string, maxAgeMs: number): void => 
 /**
  * Generates a signed JWT for the given user payload.
  */
-const generateToken = (payload: { id: string; role: UserRole }): string => {
+export const generateToken = (payload: { id: string; role: UserRole }): string => {
   if (!JWT_SECRET) {
     throw new Error('JWT_SECRET is required for authentication');
   }

@@ -42,9 +42,13 @@ export const validate = (config: Record<string, unknown>) => {
         'string.min': `JWT_SECRET must be at least ${MIN_JWT_SECRET_LENGTH} characters.`,
       }),
     JWT_EXPIRES_IN: Joi.string().default('7d'),
-    // Admin sessions are deliberately shorter-lived than customer sessions.
-    // Optional: a default is applied, so no deployment change is required.
-    ADMIN_JWT_EXPIRES_IN: Joi.string().default('1h'),
+
+    // Admin sessions are FIXED at 2 hours (7200 s) and deliberately have no env
+    // knob — the TTL is hardcoded next to the cookie lifetime so the two can
+    // never drift (see src/auth/auth.controller.ts).
+    // The universal admin inbox every admin OTP is emailed to. Optional: the
+    // code falls back to the primary admin address when unset.
+    ADMIN_EMAIL: Joi.string().optional(),
     IMAGEKIT_URL_ENDPOINT: Joi.string().uri().required(),
     IMAGEKIT_PUBLIC_KEY: Joi.string().required(),
     IMAGEKIT_PRIVATE_KEY: Joi.string().required(),

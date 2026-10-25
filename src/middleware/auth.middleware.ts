@@ -2,6 +2,7 @@ import { Request, Response, NextFunction, RequestHandler } from 'express';
 import jwt from 'jsonwebtoken';
 import mongoose from 'mongoose';
 import { UserModel } from '../auth/user.model';
+import { AdminModel } from '../admin/admin.model';
 
 export type UserRole = 'user' | 'admin';
 
@@ -34,6 +35,11 @@ export const isUserRole = (value: unknown): value is UserRole =>
 /**
  * Loads the live account behind a token id.
  *
+ * Admin sessions are minted against the dedicated `Admin` collection; customer
+ * sessions against `User`. Routing by the role baked into the token keeps the
+ * two account stores fully separate, and means an admin id can never be looked
+ * up as a customer (or vice versa).
+ *
  * Returns null when the id is malformed, the account no longer exists, or its
  * stored role is not a recognised value. The DB round-trip on every request is
  * a deliberate trade-off: it makes role demotion and account deletion take
@@ -41,12 +47,17 @@ export const isUserRole = (value: unknown): value is UserRole =>
  * until the token expires. There is intentionally no cache — a TTL cache would
  * reintroduce exactly that stale-role window.
  */
-const loadLiveAccountRole = async (userId: string): Promise<UserRole | null> => {
+const loadLiveAccountRole = async (userId: string, tokenRole: UserRole): Promise<UserRole | null> => {
   if (!mongoose.Types.ObjectId.isValid(userId)) {
     return null;
   }
 
-  const account = await UserModel.findById(userId).select('role').lean().exec();
+  // Branched (rather than a union call) because the two models have
+  // incompatible `findById` overloads — this keeps the lookup typed.
+  const account =
+    tokenRole === 'admin'
+      ? await AdminModel.findById(userId).select('role').lean().exec()
+      : await UserModel.findById(userId).select('role').lean().exec();
 
   if (!account || !isUserRole(account.role)) {
     return null;
@@ -110,7 +121,9 @@ export const protect = async (
       return;
     }
 
-    const liveRole = await loadLiveAccountRole(decoded.id);
+    const tokenRole: UserRole = decoded.role === 'admin' ? 'admin' : 'user';
+
+    const liveRole = await loadLiveAccountRole(decoded.id, tokenRole);
 
     if (!liveRole) {
       res.status(401).json({

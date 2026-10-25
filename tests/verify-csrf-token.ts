@@ -901,6 +901,7 @@ const main = async (): Promise<void> => {
 
     const issuedInController = (authController.match(/csrfToken:\s*createCsrfToken\(/g) ?? []).length;
 
+
     check(
         'all three auth entry points (register/login/google) issue the token',
         issuedInController === 3,

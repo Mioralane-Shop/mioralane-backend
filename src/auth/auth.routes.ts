@@ -14,6 +14,7 @@ import { protect, AuthenticatedRequest } from '../middleware/auth.middleware';
 import { createCsrfToken, readSessionToken } from '../middleware/csrf-token.middleware';
 import { requireTurnstile } from '../turnstile/turnstile.middleware';
 import { UserModel } from './user.model';
+import { AdminModel } from '../admin/admin.model';
 
 const router = Router();
 
@@ -109,6 +110,31 @@ router.get(
 
     if (!userId) {
       res.status(401).json({ success: false, message: 'Not authorized' });
+      return;
+    }
+
+    // Admin sessions live in the dedicated `Admin` collection; the session
+    // bootstrap must answer for both account stores.
+    if (req.user?.role === 'admin') {
+      const admin = await AdminModel.findById(userId);
+
+      if (!admin) {
+        res.status(401).json({ success: false, message: 'User session is no longer valid' });
+        return;
+      }
+
+      res.status(200).json({
+        success: true,
+        message: 'Token is valid!',
+        csrfToken: createCsrfToken(readSessionToken(req)),
+        user: {
+          id: admin._id.toString(),
+          email: admin.email,
+          name: admin.name,
+          role: admin.role,
+          createdAt: admin.createdAt,
+        },
+      });
       return;
     }
 
