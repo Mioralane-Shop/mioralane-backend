@@ -48,7 +48,7 @@
     "jsonwebtoken": "^9.0.3",
     "mongoose": "^9.11.2",
     "multer": "^2.4.0",
-    "nodemailer": "^10.1.7",
+    "nodemailer": "^10.2.1",
     "swagger-jsdoc": "^6.3.0",
     "swagger-ui-express": "^5.0.1",
     "tsconfig-paths": "^4.2.0",
