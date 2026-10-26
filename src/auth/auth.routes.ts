@@ -112,6 +112,9 @@ router.get(
       return;
     }
 
+    // Customer sessions only. Admin sessions are a separate family with their own
+    // endpoint (`GET /api/admin/auth/me`); an admin cookie cannot authenticate
+    // this route, and nothing here can return an admin profile.
     const user = await UserModel.findById(userId);
 
     if (!user) {

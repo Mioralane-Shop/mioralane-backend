@@ -42,9 +42,30 @@ export const validate = (config: Record<string, unknown>) => {
         'string.min': `JWT_SECRET must be at least ${MIN_JWT_SECRET_LENGTH} characters.`,
       }),
     JWT_EXPIRES_IN: Joi.string().default('7d'),
-    // Admin sessions are deliberately shorter-lived than customer sessions.
-    // Optional: a default is applied, so no deployment change is required.
-    ADMIN_JWT_EXPIRES_IN: Joi.string().default('1h'),
+
+    // ── Admin authentication ──────────────────────────────────────────────
+    // The inbox every admin login OTP is emailed to. Optional at boot but the
+    // login endpoint fails closed (503) when it is missing, because guessing an
+    // address would send codes to the wrong place. `ADMIN_EMAIL` is the old name
+    // and is still accepted as a fallback.
+    ADMIN_OTP_EMAIL: Joi.string().email().optional(),
+    ADMIN_EMAIL: Joi.string().email().optional(),
+    // Shared secret required by POST /api/admin/auth/bootstrap. Absent means the
+    // endpoint answers 503 — that is how bootstrap is disabled after first use.
+    ADMIN_BOOTSTRAP_SECRET: Joi.string().min(32).optional().messages({
+      'string.min':
+        'ADMIN_BOOTSTRAP_SECRET must be at least 32 characters (openssl rand -base64 48).',
+    }),
+    // 5 minutes by default, bounded so a typo cannot create a 15-hour code.
+    ADMIN_OTP_TTL_MINUTES: Joi.number().integer().min(1).max(15).optional(),
+    // Admin session lifetime. Honoured outside production only; production is
+    // pinned to 3 hours in code (see admin/admin-session.service.ts), so this knob
+    // can shorten a staging session for expiry testing but never weaken the real
+    // policy.
+    ADMIN_SESSION_TTL_HOURS: Joi.number().integer().min(1).max(24).optional(),
+    // Password used by `npm run seed:admin` only when it creates the account;
+    // never read by the API itself.
+    ADMIN_SEED_PASSWORD: Joi.string().optional(),
     IMAGEKIT_URL_ENDPOINT: Joi.string().uri().required(),
     IMAGEKIT_PUBLIC_KEY: Joi.string().required(),
     IMAGEKIT_PRIVATE_KEY: Joi.string().required(),

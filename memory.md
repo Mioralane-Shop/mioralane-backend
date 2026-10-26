@@ -14,6 +14,8 @@ REST API for the **Mioralane** Korean-skincare e-commerce project. Deployed on *
 - `npm run start` — `node dist/main.js`
 - `npm run start:prod` — production run
 - `npm run seed:combos` — seed combo data
+- `npm run seed:admin` — provision an admin account in the `Admin` collection (prefer the bootstrap endpoint)
+- `npm run verify:admin-auth` — behavioural harness for the admin 2FA/session flow (no DB needed)
 - `npm run migrate:wishlist` — backfill wishlist/comboWishlist for existing users
 
 > Run from the backend dir: `cd e:\Business\Mioralane\mioralane-backend; npm run dev`. Default port **5000** (`process.env.PORT || 5000`). Swagger at `/api/docs`.
@@ -28,9 +30,10 @@ src/
 ├── swagger.ts         # OpenAPI spec + swagger-ui
 ├── api/index.ts       # Vercel serverless handler
 ├── config/            # configuration.ts + env.validation.ts (Joi)
-├── middleware/        # auth.middleware (protect/adminOnly), rateLimiter.middleware (authLimiter)
+├── middleware/        # auth.middleware (protect = customer, adminGuard = admin), rateLimiter.middleware
 ├── common/  enums/  utils/  types/
-├── auth/              # user.model.ts + auth.controller.ts + auth.routes.ts
+├── auth/              # user.model.ts + auth.controller.ts + auth.routes.ts + jwt.constants.ts
+├── admin/             # Admin/AdminOtp/AdminSession models + admin-auth controller/routes/services
 ├── product/  combo/  order/  customer/  dashboard/  wishlist/
 └── scripts/           # seed-combos.ts, migrate-user-wishlist.ts
 ```
@@ -38,10 +41,13 @@ src/
 ## Environment (Joi-validated)
 `PORT` (default 3000), `NODE_ENV` (development|production|test), `MONGODB_URI` (required), `JWT_SECRET` (required), `JWT_EXPIRES_IN` (default `7d`). Also uses `GOOGLE_CLIENT_ID`.
 
+Admin auth: `ADMIN_OTP_EMAIL` (inbox every OTP is sent to — the login fails closed with 503 if unset; `ADMIN_EMAIL` is the deprecated alias), `ADMIN_BOOTSTRAP_SECRET` (>=32 chars; empty disables bootstrap), `ADMIN_OTP_TTL_MINUTES` (default 5, 1-15), `ADMIN_SESSION_TTL_HOURS` (honoured outside production only; production is pinned to 3 h). See `docs/ADMIN_AUTH.md`.
+
 ## API Routes (mounted in `app.module.ts`)
 | Prefix | Methods | Notes |
 | --- | --- | --- |
-| `/api/auth` | POST register/login/google/logout · GET me | `me` is protected; auth routes are rate-limited |
+| `/api/auth` | POST register/login/google/logout · GET me | customer only; `me` is protected; auth routes are rate-limited |
+| `/api/admin/auth` | POST bootstrap/login/verify-otp/resend-otp/logout · GET me | separate admin 2FA flow; bootstrap is one-shot + secret-gated; `me`/`logout` use `adminGuard` |
 | `/api/products` | GET / · GET /:idOrSlug (public) · POST / · PUT /:id · DELETE /:id (admin) | search/sort/pagination/filters |
 | `/api/combos` | GET / · GET /:idOrSlug (public) · POST / · PUT /:id · DELETE /:id (admin) | |
 | `/api/orders` | POST / · GET / · GET /:id (protected user flow) | |
@@ -54,12 +60,22 @@ src/
 
 ## Models (Mongoose)
 - **User** (`auth/user.model.ts`): password auto-hashed in `pre('save')`; token payload `{ id, role: 'user'|'admin' }`.
+- **Admin** (`admin/admin.model.ts`), collection `admins`: the ONLY admin account store. Normalized unique email, bcrypt password (`select: false`), `name`, `role` (`owner`|`admin`), `permissions[]`, `isActive`, `lastLoginAt`, timestamps. `role: 'admin'` on a **User** row does NOT make an admin.
+- **AdminOtp** (`admin/admin-otp.model.ts`), collection `adminotps`: one outstanding login challenge — `adminId`, unique `challengeId`, SHA-256 `otpHash` (never the raw code), `expiresAt` (5 min, `ADMIN_OTP_TTL_MINUTES`), `lastSentAt` (resend cooldown), `attempts` (max 5), `consumedAt` (single use). TTL index on `expiresAt` is housekeeping only; expiry is enforced in code.
+- **AdminSession** (`admin/admin-session.model.ts`), collection `adminsessions`: `adminId`, unique `tokenHash` = SHA-256 of the JWT `sid`, `expiresAt` (fixed 3 h), `revokedAt`/`revokedReason`, `lastSeenAt`. Every admin request validates this row AND the live `Admin.isActive`.
 - **Product** (`product/product.model.ts`): title, slug, brand, category, description, skinType, skinConcern, price, salePrice, badge, images, hoverImage, volume, stock, isBestSeller, isNewArrival, isPopularPick.
 - **Combo** (`combo/combo.model.ts`): title, slug, badge, description, price, compareAtPrice, savings, includedItems, routineTag, category, brand, images, size, volume, stock, rating, numReviews, concerns, skinType, isBestSeller, isNewArrival. `toJSON` transform aliases fields for frontend `ProductCard` compatibility.
 - **Order** (`order/order.model.ts`).
 
 ## Auth & Middleware
-- `middleware/auth.middleware.ts` exports `protect` and `adminOnly` (use `adminOnly` *after* `protect`).
+- `middleware/auth.middleware.ts` exports TWO separate families:
+  - customer: `protect` (reads the `token` cookie / `Authorization` header, verifies a customer JWT, loads the live `User` role).
+  - admin: `adminProtect` + `adminOnly`, exposed to routes as `adminGuard` (`[...]` frozen). It reads ONLY the `admin_token` cookie, verifies an admin JWT (audience `mioralane-admin-clients`, claim `typ: 'admin'`), then requires a live unrevoked unexpired `adminsessions` row belonging to an active `Admin`.
+  - `adminOnly` requires `req.admin` (set only by `adminProtect`), so pairing it with `protect` fails closed. Every `/api/admin/*` business route uses `adminGuard`.
+  - `adminProtect` also sets `req.user = { id, role: 'admin' }` as an audit-field compatibility shim; that value comes from the verified admin session.
+- Customer JWT is httpOnly cookie `token` (+ `Authorization: ****** fallback). Admin JWT is httpOnly cookie `admin_token` only. Both are `secure` + `sameSite:none` in production.
+- Admin sessions are exactly 3 h from OTP verification and never slide. `ADMIN_SESSION_TTL_HOURS` is honoured OUTSIDE production only, so staging can shorten a session for expiry testing without touching the production policy.
+- CSRF: `csrfTokenGuard` accepts a token derived from ANY session cookie present (customer scope `csrf.v1`, admin scope `csrf.admin.v1`). Pre-session admin endpoints (`bootstrap`, `login`, `verify-otp`, `resend-otp`) are exempt by exact path; `logout` is not.
 - JWT set as httpOnly cookie `token` (`secure` + `sameSite:none` in production for cross-domain) and also returned in body for Bearer flow.
 - CORS allows `mioralane.com`, `www.mioralane.com`, plus localhost origins (`3000/3001/3100`).
 
