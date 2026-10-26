@@ -222,10 +222,12 @@ const createApp = (options: CreateAppOptions = {}): express.Application => {
   // Routes — auth rate-limited
   app.use('/api/auth', authLimiter, authRoutes);
 
-  // Admin auth bootstrap: POST /login (email+password -> OTP) and POST
-  // /verify-otp (OTP -> 2-hour session). Deliberately not behind the admin
-  // guard — the caller holds no session yet; see admin-auth.routes.ts and the
-  // reasoned exceptions in the route-guards harness.
+  // Admin authentication: POST /bootstrap (one-time provisioning, secret-gated),
+  // POST /login (email+password -> OTP), POST /verify-otp (OTP -> 3-hour session),
+  // POST /resend-otp, and the session-bound GET /me + POST /logout. The four
+  // pre-session routes are deliberately not behind the admin guard — the caller
+  // holds no session yet; see admin-auth.routes.ts and the reasoned exceptions in
+  // the route-guards harness.
   app.use('/api/admin/auth', authLimiter, adminAuthRoutes);
 
   // Product routes (public + admin)

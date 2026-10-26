@@ -40,17 +40,18 @@
  *     grow its own weaker copy again.
  *
  *  C. Guard-chain runtime contract. Proves `adminGuard` holds the original
- *     `protect`/`adminOnly` function references (no wrapper), and that
- *     registering an async handler through a spread array still lets Express 5
- *     forward a rejection instead of hanging the request.
- *
+ *     `adminProtect`/`adminOnly` function references (no wrapper), that it does
+ *     NOT contain the customer `protect` (so an admin route can never be
+ *     authenticated by a customer session), and that registering an async handler
+ *     through a spread array still lets Express 5 forward a rejection instead of
+ *     hanging the request. *
  * Exits non-zero if any check fails.
  */
 import { readdirSync, readFileSync } from 'node:fs';
 import type { Server } from 'node:http';
 import { join } from 'node:path';
 import express, { type RequestHandler } from 'express';
-import { adminGuard, adminOnly, protect } from '../src/middleware/auth.middleware';
+import { adminGuard, adminOnly, adminProtect, protect } from '../src/middleware/auth.middleware';
 
 type Failure = string;
 
@@ -363,6 +364,12 @@ const collectMounts = (): Array<{ path: string; args: string }> => {
 const ADMIN_PUBLIC_BOOTSTRAP_EXCEPTIONS: Array<{ method: string; path: string; reason: string }> = [
     {
         method: 'POST',
+        path: '/api/admin/auth/bootstrap',
+        reason:
+            'one-time account provisioning, guarded by ADMIN_BOOTSTRAP_SECRET and refused once any admin exists — it must work before any admin can sign in',
+    },
+    {
+        method: 'POST',
         path: '/api/admin/auth/login',
         reason: 'admin 2FA bootstrap — validates credentials and requests an OTP, before any session exists',
     },
@@ -370,6 +377,12 @@ const ADMIN_PUBLIC_BOOTSTRAP_EXCEPTIONS: Array<{ method: string; path: string; r
         method: 'POST',
         path: '/api/admin/auth/verify-otp',
         reason: 'admin 2FA bootstrap — this request issues the session, so no session (and no guard) can exist yet',
+    },
+    {
+        method: 'POST',
+        path: '/api/admin/auth/resend-otp',
+        reason:
+            'pre-session by definition: re-issues a code for a live challenge (cooldown + rate limited), so no session exists to guard',
     },
 ];
 
@@ -797,10 +810,22 @@ const checkGuardChainRuntime = async (): Promise<void> => {
         console.log('  OK   mutating adminGuard throws (freeze is enforced)');
     }
 
-    if (adminGuard[0] !== (protect as unknown as RequestHandler)) {
-        fail('adminGuard[0] is not the original protect function reference');
+    if (adminGuard[0] !== (adminProtect as unknown as RequestHandler)) {
+        fail('adminGuard[0] is not the original adminProtect function reference');
     } else {
-        console.log('  OK   adminGuard[0] === protect (no wrapper; the cast is type-level only)');
+        console.log('  OK   adminGuard[0] === adminProtect (no wrapper; the cast is type-level only)');
+    }
+
+    /*
+     * The isolation invariant: admin routes must never be authenticated by the
+     * customer `protect`. If someone "simplifies" the chain back to
+     * `[protect, adminOnly]`, a customer JWT (or a legacy `User` row with
+     * role "admin") would reach every admin endpoint again. Fail loudly.
+     */
+    if ((adminGuard as readonly RequestHandler[]).includes(protect as unknown as RequestHandler)) {
+        fail('adminGuard contains the customer protect middleware — customer sessions could reach admin APIs');
+    } else {
+        console.log('  OK   adminGuard does not contain the customer protect middleware');
     }
 
     if (adminGuard[1] !== (adminOnly as unknown as RequestHandler)) {

@@ -222,3 +222,58 @@ export const createWriteLimiter = (settings: RateLimitSettings): RequestHandler 
         skip: (req: Request): boolean => !isStateChangingMethod(req.method),
         message: LIMIT_BODY,
     });
+
+/* ── Admin authentication tiers ──────────────────────────────────────────────
+ *
+ * Three separate buckets, because these endpoints fail in different ways:
+ *
+ *   - `adminLoginLimiter`        password guessing
+ *   - `adminOtpVerifyLimiter`    code guessing (also bounded per challenge in the
+ *                                database — see MAX_ADMIN_OTP_ATTEMPTS)
+ *   - `adminOtpResendLimiter`    mail-bombing the shared admin inbox
+ *   - `adminBootstrapLimiter`    hammering the one-time provisioning endpoint
+ *
+ * Each is its own limiter rather than a share of `authLimiter` so a burst on one
+ * endpoint cannot lock an administrator out of another. All keep the library's
+ * default key generator (per-IP, with IPv6 normalisation) for the same reason the
+ * tiers above do.
+ */
+
+export const ADMIN_LOGIN_LIMIT = { windowMs: 5 * 60 * 1000, limit: 10 } as const;
+export const ADMIN_OTP_VERIFY_LIMIT = { windowMs: 5 * 60 * 1000, limit: 10 } as const;
+export const ADMIN_OTP_RESEND_LIMIT = { windowMs: 15 * 60 * 1000, limit: 5 } as const;
+export const ADMIN_BOOTSTRAP_LIMIT = { windowMs: 60 * 60 * 1000, limit: 5 } as const;
+
+const adminLimitBody = (message: string) => ({ success: false, message });
+
+export const adminLoginLimiter = rateLimit({
+    windowMs: ADMIN_LOGIN_LIMIT.windowMs,
+    limit: ADMIN_LOGIN_LIMIT.limit,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: adminLimitBody('Too many sign-in attempts — please try again later'),
+});
+
+export const adminOtpVerifyLimiter = rateLimit({
+    windowMs: ADMIN_OTP_VERIFY_LIMIT.windowMs,
+    limit: ADMIN_OTP_VERIFY_LIMIT.limit,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: adminLimitBody('Too many verification attempts — please try again later'),
+});
+
+export const adminOtpResendLimiter = rateLimit({
+    windowMs: ADMIN_OTP_RESEND_LIMIT.windowMs,
+    limit: ADMIN_OTP_RESEND_LIMIT.limit,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: adminLimitBody('Too many code requests — please try again later'),
+});
+
+export const adminBootstrapLimiter = rateLimit({
+    windowMs: ADMIN_BOOTSTRAP_LIMIT.windowMs,
+    limit: ADMIN_BOOTSTRAP_LIMIT.limit,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: adminLimitBody('Too many bootstrap attempts — please try again later'),
+});

@@ -179,3 +179,5 @@ jobs:
       # mailer transport is stubbed too, so no database or network is needed).
       - name: Verify password reset
         run: npm run verify:password-reset
+      - name: Verify admin authentication (2FA, sessions, isolation)
+        run: npm run verify:admin-auth
