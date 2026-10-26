@@ -19,7 +19,9 @@
     "verify:security-headers": "tsx tests/verify-security-headers.ts",
     "verify:csrf": "tsx tests/verify-csrf-token.ts",
     "seed:combos": "tsx src/scripts/seed-combos.ts",
+
     "seed:brands": "tsx src/scripts/seed-brands.ts",
+    "seed:admin": "tsx src/scripts/seed-admin.ts",
     "migrate:brand-logos": "tsx src/scripts/migrate-brand-logos.ts",
     "migrate:wishlist": "tsx src/scripts/migrate-user-wishlist.ts",
     "migrate:wishlist-items": "tsx src/scripts/migrate-wishlist-items.ts",
@@ -32,7 +34,8 @@
     "verify:brand": "tsx tests/verify-brand.ts",
     "verify:coupon-cancel": "tsx tests/verify-coupon-cancel.ts",
     "verify:turnstile": "tsx tests/verify-turnstile.ts",
-    "verify:password-reset": "tsx tests/verify-password-reset.ts"
+    "verify:password-reset": "tsx tests/verify-password-reset.ts",
+    "verify:admin-auth": "tsx tests/verify-admin-auth.ts"
   },
   "dependencies": {
     "@imagekit/nodejs": "^7.12.1",

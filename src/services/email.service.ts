@@ -3,7 +3,7 @@ import nodemailer, { type Transporter } from 'nodemailer';
 /**
  * Transactional email delivery over Brevo's SMTP relay.
  *
- * The reset token is only ever interpolated into the message body; it is never
+ * The reset token and the admin OTP are only ever interpolated into a message
  * logged here and never returned by an API response. Settings are read lazily so
  * a deployment (and the verification harness) can set them without re-importing
  * this module.
@@ -100,6 +100,57 @@ export const sendPasswordResetEmail = async (to: string, token: string): Promise
       'We received a request to reset your Mioralane password.\n\n' +
       `Choose a new password here (valid for 1 hour):\n${resetLink}\n\n` +
       'If you did not request this, you can ignore this email. Your password will not change.',
+
+    html,
+  });
+};
+
+/**
+ * Sends the 6-digit admin login OTP (2FA second factor).
+ *
+ * Throws when SMTP is not configured or the relay rejects the message, so a
+ * caller can only report `success: true` once the relay accepted it. The code is
+ * never logged here — and never logged by the caller either.
+ *
+ * `ttlMinutes` is passed in from the configured challenge lifetime
+ * (`ADMIN_OTP_TTL_MINUTES`) so the copy cannot promise 5 minutes while the code
+ * expires in 2. Defaults to 5 for any existing caller.
+ */
+export const sendAdminOtpEmail = async (
+  to: string,
+  otp: string,
+  ttlMinutes: number = 5
+): Promise<void> => {
+  const from = (process.env.MAIL_FROM ?? '').trim() || DEFAULT_MAIL_FROM;
+
+  const html = `
+    <div style="margin:0;padding:24px;background:#f7f5f2;font-family:Arial,Helvetica,sans-serif;color:#1f2933;">
+      <div style="max-width:520px;margin:0 auto;background:#ffffff;border-radius:12px;padding:32px;">
+        <h1 style="margin:0 0 8px;font-size:22px;line-height:1.3;">Mioralane Admin</h1>
+        <p style="margin:0 0 16px;font-size:13px;line-height:1.6;color:#6b7280;text-transform:uppercase;letter-spacing:1px;">
+          Admin sign-in verification code
+        </p>
+        <p style="margin:0 0 16px;font-size:15px;line-height:1.6;">
+          Use the code below to finish signing in to the Mioralane admin portal.
+        </p>
+        <p style="margin:0 0 24px;font-size:28px;font-weight:bold;letter-spacing:8px;color:#1f2933;">${otp}</p>
+        <p style="margin:0 0 16px;font-size:14px;line-height:1.6;">
+          This code expires in ${ttlMinutes} minute${ttlMinutes === 1 ? '' : 's'} and can only be used once.
+        </p>
+        <p style="margin:0;font-size:14px;line-height:1.6;">
+          If you did not attempt to sign in, you can safely ignore this email.
+        </p>
+      </div>
+    </div>
+  `.trim();
+
+  await getTransporter().sendMail({
+    from,
+    to,
+    subject: 'Mioralane Admin — your verification code',
+    text:
+      `Your Mioralane Admin verification code is ${otp}. ` +
+      `It expires in ${ttlMinutes} minute${ttlMinutes === 1 ? '' : 's'} and can only be used once.`,
     html,
   });
 };

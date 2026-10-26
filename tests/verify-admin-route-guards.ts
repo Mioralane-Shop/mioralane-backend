@@ -40,17 +40,18 @@
  *     grow its own weaker copy again.
  *
  *  C. Guard-chain runtime contract. Proves `adminGuard` holds the original
- *     `protect`/`adminOnly` function references (no wrapper), and that
- *     registering an async handler through a spread array still lets Express 5
- *     forward a rejection instead of hanging the request.
- *
+ *     `adminProtect`/`adminOnly` function references (no wrapper), that it does
+ *     NOT contain the customer `protect` (so an admin route can never be
+ *     authenticated by a customer session), and that registering an async handler
+ *     through a spread array still lets Express 5 forward a rejection instead of
+ *     hanging the request. *
  * Exits non-zero if any check fails.
  */
 import { readdirSync, readFileSync } from 'node:fs';
 import type { Server } from 'node:http';
 import { join } from 'node:path';
 import express, { type RequestHandler } from 'express';
-import { adminGuard, adminOnly, protect } from '../src/middleware/auth.middleware';
+import { adminGuard, adminOnly, adminProtect, protect } from '../src/middleware/auth.middleware';
 
 type Failure = string;
 
@@ -351,12 +352,47 @@ const collectMounts = (): Array<{ path: string; args: string }> => {
         .filter((entry): entry is { path: string; args: string } => entry !== null);
 };
 
+/**
+ * Intentionally PUBLIC routes mounted under `/api/admin`.
+ *
+ * They are session-bootstrap endpoints: the request either requests the OTP or
+ * issues the session itself, so no session — and therefore no guard — can
+ * exist yet. Declared explicitly (with a reason) instead of loosening the
+ * rule, exactly like check A2's `publicExceptions`: any OTHER unguarded route
+ * under `/api/admin` still fails, and a stale entry is itself a failure.
+ */
+const ADMIN_PUBLIC_BOOTSTRAP_EXCEPTIONS: Array<{ method: string; path: string; reason: string }> = [
+    {
+        method: 'POST',
+        path: '/api/admin/auth/bootstrap',
+        reason:
+            'one-time account provisioning, guarded by ADMIN_BOOTSTRAP_SECRET and refused once any admin exists — it must work before any admin can sign in',
+    },
+    {
+        method: 'POST',
+        path: '/api/admin/auth/login',
+        reason: 'admin 2FA bootstrap — validates credentials and requests an OTP, before any session exists',
+    },
+    {
+        method: 'POST',
+        path: '/api/admin/auth/verify-otp',
+        reason: 'admin 2FA bootstrap — this request issues the session, so no session (and no guard) can exist yet',
+    },
+    {
+        method: 'POST',
+        path: '/api/admin/auth/resend-otp',
+        reason:
+            'pre-session by definition: re-issues a code for a live challenge (cooldown + rate limited), so no session exists to guard',
+    },
+];
+
 /** Check A — every route mounted under /api/admin is guarded. */
 const checkAdminGuardCoverage = (routers: RouterInfo[]): void => {
     const importedRouters = collectImportedRouters(routers);
     const mounts = collectMounts();
     const rows: string[] = [];
     let adminRouteCount = 0;
+    const matchedExceptions = new Set<string>();
 
     for (const mount of mounts) {
         for (const [localName, router] of importedRouters) {
@@ -389,8 +425,19 @@ const checkAdminGuardCoverage = (routers: RouterInfo[]): void => {
                         `${route.method.padEnd(6)} ${fullPath.padEnd(42)} ${source.padEnd(18)} [${shortPath(route.file)}]`,
                     );
 
+
                     if (source === 'NONE') {
-                        fail(`unguarded admin route: ${route.method} ${fullPath} (${shortPath(route.file)})`);
+                        const exception = ADMIN_PUBLIC_BOOTSTRAP_EXCEPTIONS.find(
+                            (entry) => entry.method === route.method && entry.path === fullPath,
+                        );
+
+                        if (exception) {
+                            matchedExceptions.add(`${exception.method} ${exception.path}`);
+                        } else {
+                            fail(
+                                `unguarded admin route: ${route.method} ${fullPath} (${shortPath(route.file)})`,
+                            );
+                        }
                     }
                 }
 
@@ -404,6 +451,19 @@ const checkAdminGuardCoverage = (routers: RouterInfo[]): void => {
                     fail(`reversed guard order: ${route.method} ${fullPath} (${shortPath(route.file)})`);
                 }
             }
+        }
+    }
+
+
+    // Every declared exception must still match a real, unguarded route — a
+    // stale entry (or an entry that has since been guarded) is itself a failure.
+    for (const exception of ADMIN_PUBLIC_BOOTSTRAP_EXCEPTIONS) {
+        const key = `${exception.method} ${exception.path}`;
+
+        if (!matchedExceptions.has(key)) {
+            fail(
+                `stale admin bootstrap exception — route not found unguarded: ${key} (${exception.reason})`,
+            );
         }
     }
 
@@ -750,10 +810,22 @@ const checkGuardChainRuntime = async (): Promise<void> => {
         console.log('  OK   mutating adminGuard throws (freeze is enforced)');
     }
 
-    if (adminGuard[0] !== (protect as unknown as RequestHandler)) {
-        fail('adminGuard[0] is not the original protect function reference');
+    if (adminGuard[0] !== (adminProtect as unknown as RequestHandler)) {
+        fail('adminGuard[0] is not the original adminProtect function reference');
     } else {
-        console.log('  OK   adminGuard[0] === protect (no wrapper; the cast is type-level only)');
+        console.log('  OK   adminGuard[0] === adminProtect (no wrapper; the cast is type-level only)');
+    }
+
+    /*
+     * The isolation invariant: admin routes must never be authenticated by the
+     * customer `protect`. If someone "simplifies" the chain back to
+     * `[protect, adminOnly]`, a customer JWT (or a legacy `User` row with
+     * role "admin") would reach every admin endpoint again. Fail loudly.
+     */
+    if ((adminGuard as readonly RequestHandler[]).includes(protect as unknown as RequestHandler)) {
+        fail('adminGuard contains the customer protect middleware — customer sessions could reach admin APIs');
+    } else {
+        console.log('  OK   adminGuard does not contain the customer protect middleware');
     }
 
     if (adminGuard[1] !== (adminOnly as unknown as RequestHandler)) {

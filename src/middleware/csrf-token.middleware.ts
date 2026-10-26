@@ -1,6 +1,7 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import { NextFunction, Request, Response } from 'express';
 import { isStateChangingMethod } from './rateLimiter.middleware';
+import { ADMIN_TOKEN_COOKIE } from '../auth/jwt.constants';
 
 /**
  * HMAC-bound CSRF token (P1.1) — the second CSRF control, alongside the
@@ -95,6 +96,19 @@ const CSRF_INVALID_RESPONSE = {
 const CSRF_SCOPE = 'csrf.v1';
 
 /**
+ * The principal a token belongs to. Customer and admin tokens are derived with
+ * different scope tags, so a token minted from a customer session can never be
+ * accepted on an admin request (or the reverse) even if an attacker somehow got
+ * hold of one — each is only ever compared against a session it was derived from.
+ */
+export type CsrfPrincipal = 'customer' | 'admin';
+
+const CSRF_SCOPE_BY_PRINCIPAL: Record<CsrfPrincipal, string> = {
+    customer: CSRF_SCOPE,
+    admin: 'csrf.admin.v1',
+};
+
+/**
  * Auth-bootstrap endpoints. Session-less by definition, so no token can exist
  * yet. Exact matches (never prefixes) — a prefix rule could be steered with a
  * crafted path, and Express's own router is case-insensitive and tolerates a
@@ -105,15 +119,29 @@ const CSRF_EXEMPT_PATHS: readonly string[] = [
     '/api/auth/register',
     '/api/auth/google',
     '/api/auth/forgot-password',
+
     '/api/auth/reset-password',
+    // Admin pre-session endpoints. `bootstrap` and `resend-otp` join `login` and
+    // `verify-otp` here for the same reason: the caller cannot hold a
+    // session-bound token before a session exists. `logout` is NOT exempt.
+    '/api/admin/auth/bootstrap',
+    '/api/admin/auth/login',
+    '/api/admin/auth/verify-otp',
+    '/api/admin/auth/resend-otp',
 ];
 
 /**
  * Builds the token for a session, or `null` when it cannot be built (no secret
  * configured, or no session). `null` always means "do not authenticate this
  * request", never "skip the check".
+ *
+ * `principal` defaults to `customer`, which keeps every pre-existing caller and
+ * harness on exactly the value it produced before the admin split.
  */
-export const createCsrfToken = (sessionToken: string | undefined): string | null => {
+export const createCsrfToken = (
+    sessionToken: string | undefined,
+    principal: CsrfPrincipal = 'customer'
+): string | null => {
     const secret = process.env.JWT_SECRET;
 
     if (!secret || !sessionToken) {
@@ -121,7 +149,7 @@ export const createCsrfToken = (sessionToken: string | undefined): string | null
     }
 
     return createHmac('sha256', secret)
-        .update(`${CSRF_SCOPE}:${sessionToken}`)
+        .update(`${CSRF_SCOPE_BY_PRINCIPAL[principal]}:${sessionToken}`)
         .digest('base64url');
 };
 
@@ -159,6 +187,42 @@ export const readSessionToken = (req: Request): string | undefined => {
     return typeof cookie === 'string' && cookie.length > 0 ? cookie : undefined;
 };
 
+/**
+ * The admin session cookie. A distinct name from the customer cookie, so a
+ * browser can hold both sessions at once and neither guard ever reads the other
+ * family's value.
+ */
+export const readAdminSessionToken = (req: Request): string | undefined => {
+    const cookie: unknown = req.cookies?.[ADMIN_TOKEN_COOKIE];
+
+    return typeof cookie === 'string' && cookie.length > 0 ? cookie : undefined;
+};
+
+/**
+ * Every session present on the request, with the principal it belongs to.
+ *
+ * A request may legitimately carry both cookies (the same API host sets them for
+ * the storefront and the admin panel). The guard must therefore accept a token
+ * that matches ANY session the request actually presents: a session-less request
+ * has nothing to forge as, and every session that IS presented still has to be
+ * proven with its own derived token.
+ */
+const readPresentSessions = (req: Request): Array<{ token: string; principal: CsrfPrincipal }> => {
+    const sessions: Array<{ token: string; principal: CsrfPrincipal }> = [];
+
+    const customerToken = readSessionToken(req);
+    if (customerToken) {
+        sessions.push({ token: customerToken, principal: 'customer' });
+    }
+
+    const adminToken = readAdminSessionToken(req);
+    if (adminToken) {
+        sessions.push({ token: adminToken, principal: 'admin' });
+    }
+
+    return sessions;
+};
+
 /** Non-empty `Authorization` header, whatever scheme it carries. */
 const hasAuthorizationHeader = (req: Request): boolean => {
     const header = req.headers.authorization;
@@ -182,14 +246,22 @@ export const csrfTokenGuard = (req: Request, res: Response, next: NextFunction):
         return;
     }
 
-    if (hasAuthorizationHeader(req)) {
+    const sessions = readPresentSessions(req);
+    const hasAdminSession = readAdminSessionToken(req) !== undefined;
+
+    /*
+     * A cross-site page cannot set the Authorization header (it is not
+     * CORS-safelisted, so the browser preflights), which is why a bearer-only
+     * native client needs no token. That exemption is withheld as soon as an
+     * admin cookie is present: an admin write must always prove the session, even
+     * if the caller also attached a header.
+     */
+    if (!hasAdminSession && hasAuthorizationHeader(req)) {
         next();
         return;
     }
 
-    const sessionToken = readSessionToken(req);
-
-    if (!sessionToken) {
+    if (sessions.length === 0) {
         next();
         return;
     }
@@ -199,10 +271,20 @@ export const csrfTokenGuard = (req: Request, res: Response, next: NextFunction):
         return;
     }
 
-    const expected = createCsrfToken(sessionToken);
     const provided = readCsrfHeader(req);
 
-    if (expected === null || provided === undefined || !tokensMatch(expected, provided)) {
+    if (provided === undefined) {
+        res.status(403).json(CSRF_INVALID_RESPONSE);
+        return;
+    }
+
+    const matches = sessions.some(({ token, principal }) => {
+        const expected = createCsrfToken(token, principal);
+
+        return expected !== null && tokensMatch(expected, provided);
+    });
+
+    if (!matches) {
         // No `console.warn` with the value: the token is a credential for this
         // session and must never reach a log line.
         res.status(403).json(CSRF_INVALID_RESPONSE);
