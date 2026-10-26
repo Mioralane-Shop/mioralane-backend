@@ -16,7 +16,6 @@ import {
 
 const JWT_SECRET = process.env.JWT_SECRET;
 const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '7d';
-const ADMIN_JWT_EXPIRES_IN = process.env.ADMIN_JWT_EXPIRES_IN || '1h';
 const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || '';
 const DEFAULT_COOKIE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 const MIN_PASSWORD_LENGTH = 8;
@@ -51,18 +50,18 @@ const resolveCookieMaxAge = (expiresIn: string): number => {
 };
 
 /**
- * Role-scoped session lifetime (P0-1.4).
+ * Customer session lifetime.
  *
- * Admins get a short session (`ADMIN_JWT_EXPIRES_IN`, default 1h); customers
- * keep the long-lived `JWT_EXPIRES_IN`, so the storefront UX is unchanged.
- * Security does not rest on expiry alone, because `protect` re-reads the
- * account's role from MongoDB on every request.
+ * Every JWT minted by this module belongs to a CUSTOMER session, including one
+ * for a legacy `User` row whose role is `"admin"` â€” that account is a customer
+ * with a role label, not an administrator. Admin sessions are a separate family
+ * with their own database-backed 3-hour lifetime (`admin/admin-session.service.ts`);
+ * nothing here can mint one.
  */
-const resolveSessionTtl = (role: UserRole): { expiresIn: string; maxAgeMs: number } => {
-  const expiresIn = role === 'admin' ? ADMIN_JWT_EXPIRES_IN : JWT_EXPIRES_IN;
-
-  return { expiresIn, maxAgeMs: resolveCookieMaxAge(expiresIn) };
-};
+export const resolveSessionTtl = (): { expiresIn: string; maxAgeMs: number } => ({
+  expiresIn: JWT_EXPIRES_IN,
+  maxAgeMs: resolveCookieMaxAge(JWT_EXPIRES_IN),
+});
 
 /**
  * Sets the JWT as an httpOnly cookie for enhanced security.
@@ -72,13 +71,13 @@ const resolveSessionTtl = (role: UserRole): { expiresIn: string; maxAgeMs: numbe
  * `maxAgeMs` is always derived from the same TTL used to sign the token, so the
  * cookie can never outlive (or under-live) the JWT it carries.
  */
-const setAuthCookie = (res: Response, token: string, maxAgeMs: number): void => {
+export const setAuthCookie = (res: Response, token: string, maxAgeMs: number): void => {
   const isProduction = process.env.NODE_ENV === 'production';
 
   res.cookie('token', token, {
     httpOnly: true,               // Not accessible via JavaScript (XSS protection)
     secure: isProduction,         // HTTPS only in production
-    sameSite: isProduction ? 'none' : 'lax', // 'none' required for cross-domain (mioralane.com ↔ vercel.app)
+    sameSite: isProduction ? 'none' : 'lax', // 'none' required for cross-domain (mioralane.com â†” vercel.app)
     maxAge: maxAgeMs,
     path: '/',
   });
@@ -87,12 +86,12 @@ const setAuthCookie = (res: Response, token: string, maxAgeMs: number): void => 
 /**
  * Generates a signed JWT for the given user payload.
  */
-const generateToken = (payload: { id: string; role: UserRole }): string => {
+export const generateToken = (payload: { id: string; role: UserRole }): string => {
   if (!JWT_SECRET) {
     throw new Error('JWT_SECRET is required for authentication');
   }
 
-  const { expiresIn } = resolveSessionTtl(payload.role);
+  const { expiresIn } = resolveSessionTtl();
 
   const options: jwt.SignOptions = {
     algorithm: JWT_ALGORITHM,
@@ -206,7 +205,7 @@ export const registerUser = async (req: Request, res: Response): Promise<void> =
 
     // Generate JWT
     const token = generateToken({ id: user._id.toString(), role: user.role });
-    const { maxAgeMs } = resolveSessionTtl(user.role);
+    const { maxAgeMs } = resolveSessionTtl();
 
     // Set httpOnly cookie
     setAuthCookie(res, token, maxAgeMs);
@@ -270,7 +269,7 @@ export const registerUser = async (req: Request, res: Response): Promise<void> =
  *                 example: "securePass123"
  *     responses:
  *       200:
- *         description: Login successful — returns token
+ *         description: Login successful â€” returns token
  *         content:
  *           application/json:
  *             schema:
@@ -304,7 +303,7 @@ export const loginUser = async (req: Request, res: Response): Promise<void> => {
     const loginIdentifier = username ?? email;
 
     // Shape and presence are enforced by `validate()` at the route. This
-    // narrowing exists only so TypeScript knows an identifier is present — the
+    // narrowing exists only so TypeScript knows an identifier is present â€” the
     // schema's refinement guarantees it at runtime.
     if (loginIdentifier === undefined) {
       res.status(400).json({ success: false, message: 'Username or email and password are required' });
@@ -342,7 +341,7 @@ export const loginUser = async (req: Request, res: Response): Promise<void> => {
 
     // Generate JWT
     const token = generateToken({ id: user._id.toString(), role: user.role });
-    const { maxAgeMs } = resolveSessionTtl(user.role);
+    const { maxAgeMs } = resolveSessionTtl();
 
     // Set httpOnly cookie
     setAuthCookie(res, token, maxAgeMs);
@@ -424,7 +423,7 @@ export const googleLogin = async (req: Request, res: Response): Promise<void> =>
     if (payload.email_verified !== true) {
       res.status(400).json({
         success: false,
-        message: 'Google account email is not verified — please verify your email with Google first',
+        message: 'Google account email is not verified â€” please verify your email with Google first',
       });
       return;
     }
@@ -437,14 +436,14 @@ export const googleLogin = async (req: Request, res: Response): Promise<void> =>
     });
 
     if (user) {
-      // Existing user — link Google if not already linked
+      // Existing user â€” link Google if not already linked
       if (!user.googleId) {
         user.googleId = googleId;
         user.avatar = user.avatar || picture;
         await user.save();
       }
     } else {
-      // New Google user — create account
+      // New Google user â€” create account
       const baseUsername = (name || email.split('@')[0]).replace(/\s+/g, '').toLowerCase();
       // Ensure unique username
       let username = baseUsername;
@@ -465,7 +464,7 @@ export const googleLogin = async (req: Request, res: Response): Promise<void> =>
 
     // Generate Mioralane JWT
     const token = generateToken({ id: user._id.toString(), role: user.role });
-    const { maxAgeMs } = resolveSessionTtl(user.role);
+    const { maxAgeMs } = resolveSessionTtl();
 
     // Set httpOnly cookie
     setAuthCookie(res, token, maxAgeMs);
@@ -499,9 +498,9 @@ export const googleLogin = async (req: Request, res: Response): Promise<void> =>
     // Distinguish known Google API errors
     const message =
       error instanceof Error && error.message.includes('Token used too late')
-        ? 'Google token has expired — please sign in again'
+        ? 'Google token has expired â€” please sign in again'
         : error instanceof Error && error.message.includes('Wrong recipient')
-          ? 'Google token mismatch — check your CLIENT_ID'
+          ? 'Google token mismatch â€” check your CLIENT_ID'
           : errorMessage();
 
     res.status(400).json({ success: false, message });

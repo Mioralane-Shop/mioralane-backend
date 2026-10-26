@@ -3,6 +3,7 @@ import cors from 'cors';
 import cookieParser from 'cookie-parser';
 import { connectDB } from './data-source';
 import authRoutes from './auth/auth.routes';
+import adminAuthRoutes from './admin/admin-auth.routes';
 import productRoutes from './product/product.routes';
 import comboRoutes from './combo/combo.routes';
 import orderRoutes from './order/order.routes';
@@ -220,6 +221,14 @@ const createApp = (options: CreateAppOptions = {}): express.Application => {
 
   // Routes — auth rate-limited
   app.use('/api/auth', authLimiter, authRoutes);
+
+  // Admin authentication: POST /bootstrap (one-time provisioning, secret-gated),
+  // POST /login (email+password -> OTP), POST /verify-otp (OTP -> 3-hour session),
+  // POST /resend-otp, and the session-bound GET /me + POST /logout. The four
+  // pre-session routes are deliberately not behind the admin guard — the caller
+  // holds no session yet; see admin-auth.routes.ts and the reasoned exceptions in
+  // the route-guards harness.
+  app.use('/api/admin/auth', authLimiter, adminAuthRoutes);
 
   // Product routes (public + admin)
   app.use('/api/products', productRoutes);
