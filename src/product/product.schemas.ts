@@ -293,6 +293,20 @@ export const productArrivalSchema = z.object({
     actualReceivedQuantity: numericField(z.coerce.number().int().min(0)),
 });
 
+/**
+ * `POST /api/products/duplicate-check` — the admin form's debounced advisory.
+ *
+ * POST rather than GET on purpose: this router's GETs are public storefront
+ * endpoints (enforced by `verify-admin-route-guards`), and the duplicate lookup
+ * is an admin concern. `title` is what is typed; `excludeId` keeps an edit from
+ * matching the product it is editing.
+ */
+export const duplicateCheckSchema = z.object({
+    title: z.string().trim().min(1, 'Product title is required').max(PRODUCT_TITLE_MAX_CHARS, `Product title cannot exceed ${PRODUCT_TITLE_MAX_CHARS} characters`),
+    excludeId: z.string().regex(OBJECT_ID_PATTERN, 'Invalid product ID').optional(),
+});
+
 export type CreateProductInput = z.infer<typeof createProductSchema>;
 export type UpdateProductInput = z.infer<typeof updateProductSchema>;
 export type ProductArrivalInput = z.infer<typeof productArrivalSchema>;
+export type DuplicateCheckInput = z.infer<typeof duplicateCheckSchema>;
