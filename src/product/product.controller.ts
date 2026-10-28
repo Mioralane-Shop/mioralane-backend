@@ -29,6 +29,7 @@ import {
   getCartCrossSellRecommendations,
   normalizeCrossSellRecommendations,
 } from '../cross-sell/cross-sell.service';
+import { findDuplicateProducts } from './product-duplicate';
 
 /** Fields kept in activity snapshots — keeps audit rows small and readable. */
 const PRODUCT_AUDIT_FIELDS = [
@@ -562,6 +563,39 @@ const formatProduct = (product: ProductAggregateRow): ProductAggregateRow => {
  *       409:
  *         description: Product with similar title already exists
  */
+/**
+ * Advisory duplicate lookup for the admin form's debounced title check.
+ *
+ * Returns exact-normalized and similar products (name, brand, image, volume,
+ * slug) for the caller to show. It never rejects anything — the enforced rule is
+ * still the unique `slug` checked in `createProduct`/`updateProduct`.
+ */
+export const checkProductDuplicates = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const body = (req.body ?? {}) as { title?: unknown; excludeId?: unknown };
+    const title = typeof body.title === 'string' ? body.title.trim() : '';
+    if (!title) {
+      res.status(400).json({
+        success: false,
+        message: 'A title is required to check for duplicates.',
+      });
+      return;
+    }
+
+    const excludeId =
+      typeof body.excludeId === 'string' && body.excludeId ? body.excludeId : undefined;
+
+    const matches = await findDuplicateProducts(title, excludeId);
+    res.json({ success: true, matches });
+  } catch (error) {
+    console.error('Error checking product duplicates:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Internal server error',
+    });
+  }
+};
+
 export const createProduct = async (req: Request, res: Response): Promise<void> => {
   try {
     const body = sanitizeMutationBody(req.body as CreateProductInput);

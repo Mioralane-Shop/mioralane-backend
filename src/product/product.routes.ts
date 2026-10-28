@@ -2,6 +2,7 @@ import { Router, RequestHandler } from 'express';
 import { adminGuard } from '../middleware/auth.middleware';
 import { validate } from '../middleware/validate.middleware';
 import {
+  checkProductDuplicates,
   createProduct,
   deleteProduct,
   getCartRecommendations,
@@ -12,6 +13,7 @@ import {
 } from './product.controller';
 import {
   createProductSchema,
+  duplicateCheckSchema,
   productArrivalSchema,
   updateProductSchema,
 } from './product.schemas';
@@ -22,6 +24,17 @@ const router = Router();
 // Public routes
 router.get('/', getProducts as RequestHandler);
 router.post('/recommendations/cart', getCartRecommendations as RequestHandler);
+
+// Admin-only advisory duplicate lookup for the product form. It is a POST (not a
+// GET) because this router's GETs are public storefront endpoints by design —
+// `verify-admin-route-guards` enforces exactly that split.
+router.post(
+  '/duplicate-check',
+  ...adminGuard,
+  validate({ body: duplicateCheckSchema }),
+  checkProductDuplicates as RequestHandler
+);
+
 router.get('/:idOrSlug', getProductByIdOrSlug as RequestHandler);
 
 // Admin-only routes. This router also serves public GETs, so the guard is
