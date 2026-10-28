@@ -3113,6 +3113,31 @@ const SETTINGS_VALIDATED_ROUTES = [
 ].map((route) => ({ ...route, subject: 'settings' }));
 
 /**
+ * The two Instagram admin writes: `sync` validates its query (`limit`/`after`)
+ * and `selection` its body. Both sit behind `...adminGuard` first, so an
+ * unauthenticated caller gets 401 rather than a 400 that leaks the contract.
+ */
+const INSTAGRAM_VALIDATED_ROUTES = [
+    {
+        method: 'post',
+        path: '/sync',
+        controller: 'syncAdminInstagramFeed',
+        label: 'POST /api/admin/instagram/sync',
+    },
+    {
+        method: 'put',
+        path: '/selection',
+        controller: 'updateAdminInstagramSelection',
+        label: 'PUT /api/admin/instagram/selection',
+    },
+].map((route) => ({
+    ...route,
+    file: 'instagram/instagram.routes.ts',
+    routerName: 'adminInstagramRoutes',
+    subject: 'instagram',
+}));
+
+/**
  * Parses `<routerName>.<method>('path', ...handlers)` registrations.
  *
  * `routerName` is a parameter because not every router is named `router` — the
@@ -3263,6 +3288,10 @@ const checkValidatedRoutes = (): void => {
     }
 
     for (const spec of SETTINGS_VALIDATED_ROUTES) {
+        assertValidateBeforeController(spec);
+    }
+
+    for (const spec of INSTAGRAM_VALIDATED_ROUTES) {
         assertValidateBeforeController(spec);
     }
 };
