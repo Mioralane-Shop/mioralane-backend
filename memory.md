@@ -1,6 +1,8 @@
 # Mioralane Backend — Project Memory
 
-REST API for the **Mioralane** Korean-skincare e-commerce project. Deployed on **Vercel** (serverless).
+REST API for the **Mioralane** Korean-skincare e-commerce project. Deployed on an **OVH Cloud VPS** behind nginx at `https://api.mioralane.com`, running the compiled `dist/` output as a long-lived Node process (`node dist/main.js`). `api/index.ts` is a retained Vercel-style serverless wrapper and is **not** the production entrypoint.
+
+> Deploying means `git pull` **then** `npm run build` **then** restart the process. `dist/` is gitignored, so a pull alone leaves the old build serving — that is exactly how the Instagram module sat merged in Git while production still answered `404` for `/api/admin/instagram` and `/api/instagram/feed`.
 
 ## Tech Stack
 - **Node.js + TypeScript**, **Express 5** as the HTTP layer (NOT NestJS — the `@nestjs/*`/`typeorm` dependencies and the `src/modules/**` scaffold they served were **deleted in P1.7**; the app is built with `express`/`cors`/`cookie-parser` in `src/app.module.ts`).
