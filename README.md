@@ -60,6 +60,7 @@ sets, and the one both front ends expect.
 | `npm run start:dev`      | Run in watch mode                        |
 | `npm run start:prod`     | Run the compiled production build        |
 | `npm run build`          | Compile the project into `dist/`         |
+| `npm run verify:instagram-deploy` | Probe a running (deployed) API for the Instagram route contract |
 | `npm run migrate:wishlist` | Backfill `wishlist` and `comboWishlist` fields for existing users |
 
 ## Folder Structure
@@ -115,6 +116,14 @@ Then verify the public surface:
 ```bash
 curl -s -o /dev/null -w "%{http_code}\n" https://api.mioralane.com/api/instagram/feed   # 200
 curl -s -o /dev/null -w "%{http_code}\n" https://api.mioralane.com/api/admin/instagram  # 401 when signed out
+```
+
+or run the whole route contract in one command, which also asserts that the admin
+sync and selection endpoints exist and stay admin-only:
+
+```bash
+npm run verify:instagram-deploy                          # defaults to https://api.mioralane.com
+npm run verify:instagram-deploy http://localhost:5000    # same contract against a local build
 ```
 
 A `404` from either route means the running build predates the module — rebuild and
