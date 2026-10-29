@@ -10,7 +10,10 @@ Backend API for the **Mioralane** skincare e-commerce project.
 - JWT auth (`jsonwebtoken` + `bcryptjs`), httpOnly cookie + Bearer header, Google OAuth
 - Joi for environment validation, Zod for request-schema validation
 - Swagger (`swagger-jsdoc` + `swagger-ui-express`) for API docs
-- Deployed on Vercel via `api/index.ts`
+- Deployed on an **OVH Cloud VPS** behind nginx (`https://api.mioralane.com`),
+  running the compiled `dist/` output as a long-lived Node process.
+  `api/index.ts` is a Vercel-compatible serverless wrapper that is kept in the
+  tree but is NOT the production entrypoint.
 
 > This section previously listed NestJS, PostgreSQL, TypeORM and
 > `@nestjs/jwt` + `passport-jwt`. None of those is in use: the `src/modules/**`
@@ -57,6 +60,7 @@ sets, and the one both front ends expect.
 | `npm run start:dev`      | Run in watch mode                        |
 | `npm run start:prod`     | Run the compiled production build        |
 | `npm run build`          | Compile the project into `dist/`         |
+| `npm run verify:instagram-deploy` | Probe a running (deployed) API for the Instagram route contract |
 | `npm run migrate:wishlist` | Backfill `wishlist` and `comboWishlist` fields for existing users |
 
 ## Folder Structure
@@ -76,13 +80,61 @@ src/
 └── <feature>/              # One folder per feature — each with .model/.schemas/.service/.controller/.routes
                           # product, combo, order, customer, address, wishlist, review, promotion,
                           # inventory, shipping, announcement, cross-sell, activity-log, dashboard,
-                          # media, imagekit
+                          # media, imagekit, instagram
 api/
-└── index.ts                # The Vercel handler — validates env, then exports createApp()
+└── index.ts                # Vercel serverless wrapper (NOT used on OVH) — validates env, then exports createApp()
 ```
 
 The cart itself is client-side: there is no server-side cart module, despite what the
 original scaffold's directory list implied.
+
+## Deploying to production (OVH Cloud VPS)
+
+Production runs `node dist/main.js` behind nginx. **`dist/` is gitignored**, so a
+`git pull` alone never changes what the running process serves — the build step is
+what ships a change. Skipping it is how a merged feature can be live in the
+repository while the deployed API still answers `404` for its routes.
+
+```bash
+cd /path/to/mioralane-backend
+
+git fetch origin
+git status -sb                  # confirm the branch tracks origin/production
+git pull --ff-only origin production
+
+npm ci                          # includes devDependencies: `tsc` lives there
+npm run build                   # src/** -> dist/
+
+# Prove the new modules are in the build BEFORE restarting
+grep -c "api/admin/instagram" dist/app.module.js     # must be >= 1
+
+pm2 restart mioralane-api       # or: systemctl restart mioralane-backend
+```
+
+Then verify the public surface:
+
+```bash
+curl -s -o /dev/null -w "%{http_code}\n" https://api.mioralane.com/api/instagram/feed   # 200
+curl -s -o /dev/null -w "%{http_code}\n" https://api.mioralane.com/api/admin/instagram  # 401 when signed out
+```
+
+or run the whole route contract in one command, which also asserts that the admin
+sync and selection endpoints exist and stay admin-only:
+
+```bash
+npm run verify:instagram-deploy                          # defaults to https://api.mioralane.com
+npm run verify:instagram-deploy http://localhost:5000    # same contract against a local build
+```
+
+A `404` from either route means the running build predates the module — rebuild and
+restart rather than changing application code. The API's own 404s are JSON
+(`{"success":false,"message":"Not found"}`), which distinguishes them from an nginx
+`404` with an HTML body.
+
+`.env` is gitignored and is NOT replaced by a pull. The Instagram feed additionally
+needs `INSTAGRAM_ACCESS_TOKEN` and `INSTAGRAM_ACCOUNT_ID` in the server's
+`.env`; without them the routes exist but sync answers
+`403 instagram_not_configured`.
 
 ## Notes
 

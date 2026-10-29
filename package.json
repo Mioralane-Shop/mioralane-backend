@@ -35,7 +35,8 @@
     "verify:coupon-cancel": "tsx tests/verify-coupon-cancel.ts",
     "verify:turnstile": "tsx tests/verify-turnstile.ts",
     "verify:password-reset": "tsx tests/verify-password-reset.ts",
-    "verify:admin-auth": "tsx tests/verify-admin-auth.ts"
+    "verify:admin-auth": "tsx tests/verify-admin-auth.ts",
+    "verify:instagram-deploy": "tsx tests/verify-instagram-deploy.ts"
   },
   "dependencies": {
     "@imagekit/nodejs": "^7.12.1",
