@@ -76,6 +76,7 @@ import {
     DESCRIPTION_MAX_CHARS,
     HOW_TO_USE_MAX_CHARS,
     INGREDIENTS_MAX_CHARS,
+    MAX_KEY_INGREDIENTS,
     SKIN_CONCERN_MAX_CHARS,
     SKIN_TYPE_MAX_CHARS,
     createProductSchema,
@@ -1914,7 +1915,7 @@ const validProductCreate = {
     images: ['https://ik.imagekit.io/mioralane/products/a.png'],
     skinType: ['Oily'],
     skinConcern: ['Dullness'],
-    keyIngredients: [{ name: 'Vitamin C', benefit: 'Brightens' }],
+    keyIngredients: [{ name: 'Vitamin C' }],
     isBestSeller: false,
     isNewArrival: true,
 };
@@ -2009,15 +2010,18 @@ const checkProductSchemas = async (url: string): Promise<void> => {
     // one of them renders an empty section on the storefront rather than an
     // obviously-incomplete one. `shortName` is deliberately absent from the list — it is
     // optional and blank means "use the full title". So is `lowStockThreshold`, whose
-    // empty state means "use the global threshold".
+    // empty state means "use the global threshold". `ingredients` left the list when the
+    // admin form stopped exposing the full INCI list; see the check below.
+    // `keyIngredients` joined it: the Ingredients tab is built from that list, so a
+    // product without one would render an empty tab.
     for (const field of [
         'title',
         'brand',
         'category',
         'price',
         'description',
-        'ingredients',
         'howToUse',
+        'keyIngredients',
         'skinType',
         'skinConcern',
         'stock',
@@ -2043,6 +2047,19 @@ const checkProductSchemas = async (url: string): Promise<void> => {
         'product: create WITHOUT lowStockThreshold is still accepted — it is the one inventory field that stays optional',
         withoutThreshold.status === 200,
         `status=${withoutThreshold.status} message=${String(withoutThreshold.body.message)}`,
+    );
+
+    // The admin form no longer edits the full ingredient list, so a create from it
+    // cannot send one. Legacy products keep their stored value; an update that omits
+    // the field leaves it alone (partial patch).
+    const withoutIngredients = await postJson(`${url}/product/create`, {
+        ...validProductCreate,
+        ingredients: undefined,
+    });
+    check(
+        'product: create WITHOUT ingredients is accepted — the full list is no longer required',
+        withoutIngredients.status === 200,
+        `status=${withoutIngredients.status} message=${String(withoutIngredients.body.message)}`,
     );
 
     /* ── the short name budget is 60 characters ─────────────────────────────── */
@@ -2320,12 +2337,69 @@ const checkProductSchemas = async (url: string): Promise<void> => {
 
     const emptyIngredientName = await postJson(`${url}/product/create`, {
         ...validProductCreate,
-        keyIngredients: [{ benefit: 'no name' }],
+        keyIngredients: [{ name: '' }],
     });
     check(
         'product: a key ingredient row without a name is rejected',
         emptyIngredientName.status === 400,
         `status=${emptyIngredientName.status} message=${String(emptyIngredientName.body.message)}`,
+    );
+
+    // A key ingredient is a name only. The description was removed, so a row that
+    // carries one is stripped to `{ name }` by Zod rather than rejected — an old client
+    // keeps working, and the field is simply not stored.
+    const ingredientWithDescription = await postJson(`${url}/product/create`, {
+        ...validProductCreate,
+        keyIngredients: [{ name: 'Vitamin C', benefit: 'Brightens' }],
+    });
+    const storedIngredients = (ingredientWithDescription.body.body as
+        | Record<string, unknown>
+        | undefined)?.keyIngredients as Array<Record<string, unknown>> | undefined;
+    check(
+        'product: a key ingredient description is stripped, not stored',
+        ingredientWithDescription.status === 200 &&
+        storedIngredients?.length === 1 &&
+        storedIngredients[0]?.name === 'Vitamin C' &&
+        !('benefit' in (storedIngredients[0] ?? {})),
+        `status=${ingredientWithDescription.status} body=${JSON.stringify(storedIngredients)}`,
+    );
+
+    const fiveIngredients = await postJson(`${url}/product/create`, {
+        ...validProductCreate,
+        keyIngredients: Array.from({ length: MAX_KEY_INGREDIENTS }, (_, index) => ({
+            name: `Ingredient ${index + 1}`,
+        })),
+    });
+    check(
+        `product: exactly ${MAX_KEY_INGREDIENTS} key ingredients are accepted (boundary is inclusive)`,
+        fiveIngredients.status === 200,
+        `status=${fiveIngredients.status} message=${String(fiveIngredients.body.message)}`,
+    );
+
+    // Required, and required to be non-empty: the storefront's Ingredients tab is built
+    // from this list, so an explicit `[]` is refused just like an omitted field.
+    const noIngredients = await postJson(`${url}/product/create`, {
+        ...validProductCreate,
+        keyIngredients: [],
+    });
+    checkValidationEnvelope(
+        'product: an empty keyIngredients list is rejected',
+        noIngredients,
+        VALIDATION_FAILURE_MESSAGE,
+        'body.keyIngredients',
+    );
+
+    const tooManyIngredients = await postJson(`${url}/product/create`, {
+        ...validProductCreate,
+        keyIngredients: Array.from({ length: MAX_KEY_INGREDIENTS + 1 }, (_, index) => ({
+            name: `Ingredient ${index + 1}`,
+        })),
+    });
+    checkValidationEnvelope(
+        `product: more than ${MAX_KEY_INGREDIENTS} key ingredients are rejected`,
+        tooManyIngredients,
+        VALIDATION_FAILURE_MESSAGE,
+        'body.keyIngredients',
     );
 
     const badCrossSellId = await postJson(`${url}/product/create`, {

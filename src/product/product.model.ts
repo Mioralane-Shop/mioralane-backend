@@ -2,6 +2,7 @@ import mongoose, { Schema, Document, Model } from 'mongoose';
 import { slugify } from '../utils/slugify';
 import { MediaAssetSchema } from '../media/media.schema';
 import type { MediaAsset } from '../media/media.types';
+import { MAX_KEY_INGREDIENTS } from './product.schemas';
 
 const integerStockValidator = {
   validator: Number.isInteger,
@@ -26,7 +27,6 @@ export interface IProduct {
   howToUse?: string;
   keyIngredients?: Array<{
     name: string;
-    benefit?: string;
   }>;
   skinType: string[];
   skinConcern: string[];
@@ -150,13 +150,17 @@ const ProductSchema = new Schema<IProductDocument>(
             required: [true, 'Key ingredient name is required'],
             trim: true,
           },
-          benefit: {
-            type: String,
-            trim: true,
-          },
         },
       ],
       default: [],
+      // The request schema refuses a sixth entry at the edge; this keeps the bound on
+      // the model too, so a save that skips the schema cannot store more than the product
+      // page is designed to render.
+      validate: {
+        validator: (value: unknown[]) =>
+          !Array.isArray(value) || value.length <= MAX_KEY_INGREDIENTS,
+        message: `Key ingredients cannot include more than ${MAX_KEY_INGREDIENTS} entries`,
+      },
     },
 
     skinType: {
@@ -346,6 +350,11 @@ const ProductSchema = new Schema<IProductDocument>(
 
         // ── Field aliases for frontend ProductCard compatibility ──
         r.name = r.title;                             // ProductCard renders product.name
+        // The brand segment of the canonical product URL
+        // (`/product/<brandSlug>/<slug>`). Derived here rather than stored so it
+        // cannot drift from `brand`; the storefront's `productPath()` falls back to
+        // its own slugifier for older payloads.
+        r.brandSlug = typeof r.brand === 'string' && r.brand.trim() ? slugify(r.brand) : undefined;
         // An empty `shortName` means "use the title". Resolved here so no consumer has
         // to know the rule, and so a card is never handed `undefined` and printing
         // nothing at all.
