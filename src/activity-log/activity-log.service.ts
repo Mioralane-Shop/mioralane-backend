@@ -263,6 +263,7 @@ const ENTITY_LABELS: Record<ActivityEntityType, string> = {
     REVIEW: 'review',
     BRAND: 'brand',
     ARTICLE: 'article',
+    HERO_SLIDE: 'hero slide',
 };
 
 const ACTION_VERBS: Record<ActivityAction, string> = {

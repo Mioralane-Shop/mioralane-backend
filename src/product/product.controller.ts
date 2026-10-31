@@ -25,6 +25,7 @@ import type {
   ProductArrivalInput,
   UpdateProductInput,
 } from './product.schemas';
+import { MAX_KEY_INGREDIENTS } from './product.schemas';
 import {
   getCartCrossSellRecommendations,
   normalizeCrossSellRecommendations,
@@ -158,12 +159,15 @@ const normalizeOptionalString = (value: unknown): string | undefined => {
   return trimmed ? trimmed : undefined;
 };
 
-const normalizeKeyIngredients = (
-  value: unknown
-): Array<{
-  name: string;
-  benefit?: string;
-}> | undefined => {
+/**
+ * Normalizes `keyIngredients` to `{ name }` rows.
+ *
+ * A key ingredient carries a name only (the optional description was removed), so a row
+ * with no name has nothing to store and is dropped when it is also empty; a row with an
+ * unrelated field but no name is an error rather than a silent no-op. The ceiling matches
+ * `MAX_KEY_INGREDIENTS` so the controller does not depend on Zod having run first.
+ */
+const normalizeKeyIngredients = (value: unknown): Array<{ name: string }> | undefined => {
   if (value === undefined) {
     return undefined;
   }
@@ -172,10 +176,13 @@ const normalizeKeyIngredients = (
     throw new Error('Key ingredients must be an array.');
   }
 
-  const normalized: Array<{
-    name: string;
-    benefit?: string;
-  }> = [];
+  if (value.length > MAX_KEY_INGREDIENTS) {
+    throw new Error(
+      `Key ingredients cannot include more than ${MAX_KEY_INGREDIENTS} entries.`
+    );
+  }
+
+  const normalized: Array<{ name: string }> = [];
 
   for (const row of value) {
     if (!row || typeof row !== 'object') {
@@ -184,19 +191,77 @@ const normalizeKeyIngredients = (
 
     const candidate = row as Record<string, unknown>;
     const name = normalizeOptionalString(candidate.name);
-    const benefit = normalizeOptionalString(candidate.benefit);
-
-    if (!name && !benefit) {
-      continue;
-    }
 
     if (!name) {
+      const hasContent = Object.values(candidate).some(
+        (entry) => typeof entry === 'string' && entry.trim().length > 0
+      );
+
+      if (!hasContent) {
+        continue;
+      }
+
       throw new Error('Each key ingredient row requires a non-empty name.');
     }
 
-    normalized.push(
-      benefit ? { name, benefit } : { name }
-    );
+    normalized.push({ name });
+  }
+
+  // The storefront builds its Ingredients tab from this list, so an empty result is a
+  // contract violation rather than "no ingredients". Zod enforces the same minimum;
+  // keeping it here means the controller does not rely on that having run.
+  if (normalized.length === 0) {
+    throw new Error('At least one key ingredient is required.');
+  }
+
+  return normalized;
+};
+
+/**
+ * The messages `normalizeKeyIngredients` can raise, in one place.
+ *
+ * Both mutation handlers answer them identically, so the predicate below keeps the two
+ * catch blocks from growing a branch per message.
+ */
+const KEY_INGREDIENT_ERRORS = new Set([
+  'Key ingredients must be an array.',
+  'Each key ingredient row requires a non-empty name.',
+  'At least one key ingredient is required.',
+  `Key ingredients cannot include more than ${MAX_KEY_INGREDIENTS} entries.`,
+]);
+
+const isKeyIngredientError = (error: unknown): error is Error =>
+  error instanceof Error && KEY_INGREDIENT_ERRORS.has(error.message);
+
+/**
+ * Trim, drop blanks and de-duplicate a stored string list without changing its order.
+ *
+ * The admin form prevents duplicate picks, but a stored list can also arrive from an
+ * older client or a hand-rolled request. Keeping values verbatim otherwise matters:
+ * legacy products carry free-form skin types that are not in the fixed admin list, and
+ * an update must not rewrite them.
+ */
+const normalizeStringList = (value: unknown): string[] | undefined => {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+
+  const seen = new Set<string>();
+  const normalized: string[] = [];
+
+  for (const entry of value) {
+    if (typeof entry !== 'string') {
+      continue;
+    }
+
+    const trimmed = entry.trim();
+    const key = trimmed.toLowerCase();
+    if (!trimmed || seen.has(key)) {
+      continue;
+    }
+
+    seen.add(key);
+    normalized.push(trimmed);
   }
 
   return normalized;
@@ -305,12 +370,21 @@ const normalizePreOrderFields = (body: ProductMutationBody): void => {
 };
 
 const normalizeSkincareFields = (body: ProductMutationBody): void => {
-  body.ingredients = normalizeOptionalString(body.ingredients);
+  // Only touch keys the caller actually sent. The admin form no longer includes the
+  // full ingredient list, so an edit omits it — and the stored value must survive.
+  if (body.ingredients !== undefined) {
+    body.ingredients = normalizeOptionalString(body.ingredients);
+  }
   body.howToUse = normalizeOptionalString(body.howToUse);
 
   const keyIngredients = normalizeKeyIngredients(body.keyIngredients);
   if (keyIngredients !== undefined) {
     body.keyIngredients = keyIngredients;
+  }
+
+  const skinType = normalizeStringList(body.skinType);
+  if (skinType !== undefined) {
+    body.skinType = skinType;
   }
 };
 
@@ -361,7 +435,7 @@ const buildExactMatchCondition = (
 /**
  * Substring match against the free-text ingredient list and against each
  * key-ingredient name. A product carries `ingredients` as a paragraph and
- * `keyIngredients` as `{name, benefit}` rows, so both are checked. `$in` with
+ * `keyIngredients` as `{name}` rows, so both are checked. `$in` with
  * RegExp values matches any of the supplied terms (OR), mirroring how
  * brand/category treat a comma-separated list.
  *
@@ -419,6 +493,12 @@ const formatProduct = (product: ProductAggregateRow): ProductAggregateRow => {
   formatted.shortName = formatted.shortName || formatted.title;
   formatted.concerns = formatted.skinConcern;
   formatted.reviewCount = formatted.numReviews;
+  // The brand segment of the canonical product URL, kept in step with the model's
+  // `toJSON` alias so the list and the detail endpoint agree.
+  formatted.brandSlug =
+    typeof formatted.brand === 'string' && formatted.brand.trim()
+      ? slugify(formatted.brand)
+      : undefined;
   formatted.description = formatted.description || '';
   // Aggregate results do not apply Mongoose defaults, so a product stored before a
   // flag existed would otherwise be returned as `undefined`. Both flags are booleans
@@ -660,16 +740,7 @@ export const createProduct = async (req: Request, res: Response): Promise<void> 
       return;
     }
 
-    if (error instanceof Error && error.message === 'Key ingredients must be an array.') {
-      res.status(400).json({
-        success: false,
-        message: 'Validation failed',
-        errors: [error.message],
-      });
-      return;
-    }
-
-    if (error instanceof Error && error.message === 'Each key ingredient row requires a non-empty name.') {
+    if (isKeyIngredientError(error)) {
       res.status(400).json({
         success: false,
         message: 'Validation failed',
@@ -869,16 +940,7 @@ export const updateProduct = async (req: Request, res: Response): Promise<void> 
       return;
     }
 
-    if (error instanceof Error && error.message === 'Key ingredients must be an array.') {
-      res.status(400).json({
-        success: false,
-        message: 'Validation failed',
-        errors: [error.message],
-      });
-      return;
-    }
-
-    if (error instanceof Error && error.message === 'Each key ingredient row requires a non-empty name.') {
+    if (isKeyIngredientError(error)) {
       res.status(400).json({
         success: false,
         message: 'Validation failed',

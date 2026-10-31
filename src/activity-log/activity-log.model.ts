@@ -31,6 +31,7 @@ export const ACTIVITY_ENTITY_TYPES = [
     'REVIEW',
     'BRAND',
     'ARTICLE',
+    'HERO_SLIDE',
 ] as const;
 
 export type ActivityEntityType = (typeof ACTIVITY_ENTITY_TYPES)[number];

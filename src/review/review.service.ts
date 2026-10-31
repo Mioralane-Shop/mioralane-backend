@@ -186,7 +186,7 @@ const serializePublicReview = (review: LeanReview) => {
 
 const serializeCustomerReview = (review: LeanReview) => {
     const product = review.product as
-        | { _id: mongoose.Types.ObjectId; title?: string; slug?: string; images?: string[] }
+        | { _id: mongoose.Types.ObjectId; title?: string; slug?: string; images?: string[]; brand?: string }
         | undefined;
 
     return {
@@ -196,6 +196,9 @@ const serializeCustomerReview = (review: LeanReview) => {
                 id: product._id.toString(),
                 title: product.title ?? '',
                 slug: product.slug ?? '',
+                // Lets the storefront build `/product/<brandSlug>/<slug>` straight
+                // from a review row instead of bouncing through the legacy redirect.
+                brand: product.brand ?? '',
                 image: Array.isArray(product.images) ? product.images[0] ?? '' : '',
             }
             : null,
@@ -463,7 +466,7 @@ export const getProductReviews = async (
 export const getCustomerReviews = async (userId: string) => {
     const reviews = await Review.find({ user: userId })
         .sort({ createdAt: -1 })
-        .populate('product', 'title slug images')
+        .populate('product', 'title slug images brand')
         .lean()
         .exec();
 
@@ -529,7 +532,7 @@ export const listAdminReviews = async (
             .sort({ createdAt: -1 })
             .skip((page - 1) * limit)
             .limit(limit)
-            .populate('product', 'title slug images')
+            .populate('product', 'title slug images brand')
             .populate('user', 'username email')
             .lean()
             .exec(),
@@ -555,7 +558,7 @@ export const getAdminReview = async (reviewId: unknown) => {
     }
 
     const review = await Review.findById(reviewId)
-        .populate('product', 'title slug images')
+        .populate('product', 'title slug images brand')
         .populate('user', 'username email')
         .lean()
         .exec();
@@ -592,7 +595,7 @@ export const moderateReview = async (reviewId: unknown, statusRaw: unknown) => {
     await syncProductRating(review.product.toString());
 
     const updated = await Review.findById(reviewId)
-        .populate('product', 'title slug images')
+        .populate('product', 'title slug images brand')
         .populate('user', 'username email')
         .lean()
         .exec();
