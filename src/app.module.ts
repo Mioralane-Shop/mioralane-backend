@@ -30,6 +30,7 @@ import {
 import { adminMegaMenuRoutes, megaMenuPublicRoutes } from './mega-menu/mega-menu.routes';
 import { adminInstagramRoutes, instagramPublicRoutes } from './instagram/instagram.routes';
 import { adminBrandRoutes, brandPublicRoutes } from './brand/brand.routes';
+import { adminHeroSlideRoutes, heroSlidePublicRoutes } from './hero-slide/hero-slide.routes';
 import { adminBlogRoutes, blogPublicRoutes } from './blog/blog.routes';
 import reviewRoutes from './review/review.routes';
 import adminReviewRoutes from './review/admin-review.routes';
@@ -279,6 +280,11 @@ const createApp = (options: CreateAppOptions = {}): express.Application => {
   // Storefront brands — CRUD, one document per brand, curated from the admin app
   app.use('/api/admin/brands', adminBrandRoutes);
   app.use('/api/brands', brandPublicRoutes);
+
+  // Homepage hero slider — poster image + target URL per slide, curated from the
+  // admin app. Public read returns only the active slides, in display order.
+  app.use('/api/admin/hero-slides', adminHeroSlideRoutes);
+  app.use('/api/hero-slides', heroSlidePublicRoutes);
   app.use('/api/shipping', shippingRoutes);
 
   // Blog articles — published storefront feed + admin editorial CRUD

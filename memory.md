@@ -57,6 +57,8 @@ Admin auth: `ADMIN_OTP_EMAIL` (inbox every OTP is sent to — the login fails cl
 | `/api/admin/customers` | admin customer management | |
 | `/api/admin/dashboard` | GET /summary (admin) | |
 | `/api/wishlist` | GET / · POST / · POST /toggle (protected) | |
+| `/api/hero-slides` | GET / (public — active slides only, sorted by `order`) | homepage hero slider |
+| `/api/admin/hero-slides` | GET / · POST / · PATCH /reorder · PATCH /:id · DELETE /:id (admin) | `/reorder` registered BEFORE `/:id` |
 | `/api` · `/api/health` | health checks | |
 | `/api/docs` · `/api/docs-json` | Swagger UI + raw OpenAPI JSON | |
 
@@ -65,9 +67,10 @@ Admin auth: `ADMIN_OTP_EMAIL` (inbox every OTP is sent to — the login fails cl
 - **Admin** (`admin/admin.model.ts`), collection `admins`: the ONLY admin account store. Normalized unique email, bcrypt password (`select: false`), `name`, `role` (`owner`|`admin`), `permissions[]`, `isActive`, `lastLoginAt`, timestamps. `role: 'admin'` on a **User** row does NOT make an admin.
 - **AdminOtp** (`admin/admin-otp.model.ts`), collection `adminotps`: one outstanding login challenge — `adminId`, unique `challengeId`, SHA-256 `otpHash` (never the raw code), `expiresAt` (5 min, `ADMIN_OTP_TTL_MINUTES`), `lastSentAt` (resend cooldown), `attempts` (max 5), `consumedAt` (single use). TTL index on `expiresAt` is housekeeping only; expiry is enforced in code.
 - **AdminSession** (`admin/admin-session.model.ts`), collection `adminsessions`: `adminId`, unique `tokenHash` = SHA-256 of the JWT `sid`, `expiresAt` (fixed 3 h), `revokedAt`/`revokedReason`, `lastSeenAt`. Every admin request validates this row AND the live `Admin.isActive`.
-- **Product** (`product/product.model.ts`): title, slug, brand, category, description, skinType, skinConcern, price, salePrice, badge, images, hoverImage, volume, stock, isBestSeller, isNewArrival, isPopularPick.
+- **Product** (`product/product.model.ts`): title, slug, brand, category, description, skinType, skinConcern, price, salePrice, badge, images, hoverImage, volume, stock, isBestSeller, isNewArrival, isPopularPick. Both the model's `toJSON` and `formatProduct()` in the controller emit **`brandSlug`** (`slugify(brand)`) — the brand segment of the storefront's `/product/<brandSlug>/<slug>` URL. Keep the two aliases in step. `ingredients` (full INCI text) is **legacy**: still stored and bounded, but no longer required on create — the admin form does not send it, and an update that omits it leaves the stored value untouched. `keyIngredients` is an ordered, **name-only** `{ name }[]`, **required with at least one entry** and capped at **5** (the storefront's only ingredient display; the optional per-ingredient description was removed and is stripped from any payload that still sends one). The requirement lives in the request schema, not the model, so legacy products with none can still be saved by non-content flows such as stock changes.
 - **Combo** (`combo/combo.model.ts`): title, slug, badge, description, price, compareAtPrice, savings, includedItems, routineTag, category, brand, images, size, volume, stock, rating, numReviews, concerns, skinType, isBestSeller, isNewArrival. `toJSON` transform aliases fields for frontend `ProductCard` compatibility.
 - **Order** (`order/order.model.ts`).
+- **HeroSlide** (`hero-slide/hero-slide.model.ts`), collection `heroslides`: `imageUrl`, `targetUrl` (both `https://` or site-relative, via `safeUrlSchema`), `altText?`, `order` (default 0; a create without one appends at `max+1`), `isActive` (default true), timestamps. Collection, not a singleton — the homepage hero poster rotation, curated from the admin's "Hero Slider" page. Public read is `{ isActive: true }` sorted `{ order, createdAt }`; index `{ isActive: 1, order: 1 }`. Audit rows use `entityType: 'HERO_SLIDE'`. Its banner is uploaded through the shared media endpoint with `assetType: 'hero-slide'` (folder `/mioralane/hero-slides`, prefix `mioralane-hero-slide`, JPEG/PNG/WebP only — SVG stays brand-logo-only).
 
 ## Auth & Middleware
 - `middleware/auth.middleware.ts` exports TWO separate families:
