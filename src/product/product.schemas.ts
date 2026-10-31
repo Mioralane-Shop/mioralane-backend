@@ -56,12 +56,33 @@ const preOrderField = z
     })
     .optional();
 
-const keyIngredientField = z.array(
-    z.object({
-        name: z.string().trim().min(1, 'Key ingredient name is required'),
-        benefit: z.string().trim().optional(),
-    })
-);
+/**
+ * How many key ingredients a product may list.
+ *
+ * The product page renders them as a grid of cards, and the admin form stops offering
+ * "Add Ingredient" at this count. It is a product-content decision, not a storage limit,
+ * so the same number is enforced by the request schema and the model.
+ */
+export const MAX_KEY_INGREDIENTS = 5;
+
+/**
+ * A key ingredient is a NAME only. The former optional `benefit` description was removed
+ * from the admin form and from the storefront, so the schema no longer accepts it —
+ * Zod strips the unknown key, which means a legacy client that still sends one is
+ * accepted and simply has it dropped.
+ *
+ * At least one entry is required: the product page's Ingredients tab is built from this
+ * list. The ceiling is `MAX_KEY_INGREDIENTS`, matching the admin form's "+ Add Ingredient"
+ * limit and the model's array validator.
+ */
+const keyIngredientField = z
+    .array(
+        z.object({
+            name: z.string().trim().min(1, 'Key ingredient name is required'),
+        })
+    )
+    .min(1, 'At least one key ingredient is required')
+    .max(MAX_KEY_INGREDIENTS, `Key ingredients cannot include more than ${MAX_KEY_INGREDIENTS} entries`);
 
 /**
  * `productId` is a 24-hex string only. The admin's `ProductCrossSellRecommendation`
@@ -225,10 +246,20 @@ const productFields = {
  * `POST /api/products`.
  *
  * The required set, and why each member is in it: `title`, `brand`, `category` and
- * `price` were always required. `description`, `ingredients`, `howToUse`, `skinType`,
- * `skinConcern`, `stock` and `volume` joined them, because a product without them renders
- * an empty section on the storefront rather than an incomplete-looking one — a details page
- * with no description, a table with no volume.
+ * `price` were always required. `description`, `howToUse`, `skinType`, `skinConcern`,
+ * `stock` and `volume` joined them, because a product without them renders an empty
+ * section on the storefront rather than an incomplete-looking one — a details page with
+ * no description, a table with no volume.
+ *
+ * `ingredients` is DELIBERATELY NOT required. The full INCI list was removed from the
+ * admin form (the product page shows Key Ingredients instead), so requiring it would
+ * make every create fail. It stays accepted and bounded for legacy records and
+ * hand-rolled clients; an update that omits it leaves the stored value untouched.
+ *
+ * `keyIngredients` IS required, with at least one entry: it is the only ingredient data
+ * the storefront renders. The model keeps it optional so a legacy product can still be
+ * saved by flows that do not touch content (stock, pre-order) — the requirement is an
+ * API-contract rule, enforced here.
  *
  * `shortName` is deliberately NOT in that list. It is optional and blank means "use the
  * full title", which the serializers resolve on read.
@@ -244,8 +275,8 @@ const productFields = {
 export const createProductSchema = z.object({
     ...productFields,
     description: descriptionField,
-    ingredients: ingredientsField,
     howToUse: howToUseField,
+    keyIngredients: keyIngredientField,
     skinType: skinTypeField,
     skinConcern: skinConcernField,
     stock: stockField,

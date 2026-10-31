@@ -31,6 +31,7 @@ export const MEDIA_FOLDER_BY_TYPE: Record<MediaAssetType, string> = {
   campaign: '/mioralane/campaigns',
   'brand-logo': '/mioralane/brand-logos',
   article: '/mioralane/articles',
+  'hero-slide': '/mioralane/hero-slides',
   // Review images are temporarily disabled.
   // review: '/mioralane/reviews',
 };
@@ -40,6 +41,7 @@ const MEDIA_FILENAME_PREFIX_BY_TYPE: Record<MediaAssetType, string> = {
   campaign: 'mioralane-campaign',
   'brand-logo': 'mioralane-brand-logo',
   article: 'mioralane-article',
+  'hero-slide': 'mioralane-hero-slide',
   // Review images are temporarily disabled.
   // review: 'mioralane-review',
 };

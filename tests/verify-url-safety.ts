@@ -302,6 +302,7 @@ const main = (): void => {
         description: 'Cold-pressed rosehip oil.',
         ingredients: 'Rosa Canina Fruit Oil',
         howToUse: 'Apply two drops to clean skin.',
+        keyIngredients: [{ name: 'Rosehip Seed Oil' }],
         price: 1200,
         stock: 10,
         volume: '30ml',

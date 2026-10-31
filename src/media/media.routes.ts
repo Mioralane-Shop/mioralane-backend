@@ -36,8 +36,9 @@ router.post(
   // missing assetType. The message names every asset type the schema accepts:
   // `brand-logo` was added to `MEDIA_ASSET_TYPES` after this sentence was first
   // written, and a rejection that omitted it told the caller a value it had just
-  // been allowed to send was invalid.
-  validate({ body: mediaUploadSchema, message: 'assetType must be product, combo, campaign, or brand-logo' }),
+  // been allowed to send was invalid. `article` and `hero-slide` joined later for
+  // the same reason.
+  validate({ body: mediaUploadSchema, message: 'assetType must be product, combo, campaign, brand-logo, article, or hero-slide' }),
   // Content check (P1.2). Deliberately after `validate`: a request that is wrong
   // in both ways must keep answering about assetType, which is what this route
   // has always done. Still before the controller, so nothing reaches ImageKit
