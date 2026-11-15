@@ -78,7 +78,7 @@ const MULTIPART_FILE = join(SRC_DIR, 'middleware', 'multipart-upload.ts');
 const UPLOAD_VALIDATOR_FILE = join(SRC_DIR, 'middleware', 'upload-validator.middleware.ts');
 
 /** Matches the wording the media route has always returned. */
-const MEDIA_TOO_LARGE_MESSAGE = 'File exceeds the 8MB upload limit';
+const MEDIA_TOO_LARGE_MESSAGE = 'File exceeds the 1 MB upload limit';
 
 const failures: string[] = [];
 
@@ -736,7 +736,7 @@ const main = async (): Promise<void> => {
     }
 
     /* ── D. the size ceiling ──────────────────────────────────────────── */
-    section('D. Size limits (unchanged)');
+    section('D. Size limits');
 
     const smallLimit = await listen(
         buildProbeApp({ withGuard: true, maxBytes: 1024, counter: 'guarded' })
@@ -768,13 +768,13 @@ const main = async (): Promise<void> => {
         });
 
         check(
-            'the real 8MB ceiling refuses a body over 8MB with 413',
+            'the real 1 MB ceiling refuses a body over 1 MB with 413',
             response.status === 413 && envelopeOf(response.body).message === MEDIA_TOO_LARGE_MESSAGE,
             `${response.status} ${response.text.slice(0, 80)}`
         );
         check(
-            'the 8MB ceiling is still 8MB',
-            MAX_MEDIA_UPLOAD_SIZE_BYTES === 8 * 1024 * 1024,
+            'the 1 MB ceiling is still 1 MB',
+            MAX_MEDIA_UPLOAD_SIZE_BYTES === 1 * 1024 * 1024,
             String(MAX_MEDIA_UPLOAD_SIZE_BYTES)
         );
     } finally {
@@ -1221,13 +1221,13 @@ const main = async (): Promise<void> => {
     check(
         'each route still passes its own limit and its own 413 wording explicitly',
         mediaRoutes.includes('maxBytes: MAX_MEDIA_UPLOAD_SIZE_BYTES') &&
-            mediaRoutes.includes("tooLargeMessage: 'File exceeds the 8MB upload limit'") &&
+            mediaRoutes.includes("tooLargeMessage: 'File exceeds the 1 MB upload limit'") &&
             imagekitRoutes.includes('maxBytes: MAX_TEST_UPLOAD_SIZE_BYTES') &&
             imagekitRoutes.includes("tooLargeMessage: 'File exceeds the temporary 5MB limit'"),
         'a route lost its limit or its message'
     );
     check(
-        'the 8MB limit is defined once and imported where it is used',
+        'the 1 MB limit is defined once and imported where it is used',
         (policySource.match(/MAX_MEDIA_UPLOAD_SIZE_BYTES = /g) ?? []).length === 1 &&
             !/MAX_MEDIA_UPLOAD_SIZE_BYTES = /.test(mediaRoutes) &&
             !/MAX_MEDIA_UPLOAD_SIZE_BYTES = /.test(mediaController) &&

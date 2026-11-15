@@ -113,7 +113,7 @@ export class MediaController {
       if (actualByteSize > MAX_MEDIA_UPLOAD_SIZE_BYTES) {
         res.status(413).json({
           success: false,
-          message: 'File exceeds the 8MB upload limit',
+          message: 'File exceeds the 1 MB upload limit',
         });
         return;
       }
