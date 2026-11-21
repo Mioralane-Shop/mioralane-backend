@@ -43,7 +43,7 @@ export type SingleFileUploadOptions = {
     maxBytes: number;
     /**
      * Exact 413 message. Route-specific and passed in rather than generated, so
-     * each route keeps the wording it has always returned (`'8MB'` on the media
+     * each route keeps the wording it has always returned (`'2 MB'` on the media
      * route, `'temporary 5MB'` on the dev-only test route).
      */
     tooLargeMessage: string;
