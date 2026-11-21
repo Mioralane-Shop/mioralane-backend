@@ -14,11 +14,11 @@ const mediaController = new MediaController(imageKitService);
 /**
  * Multer, built by the shared factory so this route and the dev-only test route
  * cannot drift apart (P1.2, G6). Only the two things that genuinely differ here
- * are passed: the 8MB ceiling and this route's 413 wording.
+ * are passed: the 2 MB ceiling and this route's 413 wording.
  */
 const handleSingleUpload: RequestHandler = createSingleFileUpload({
   maxBytes: MAX_MEDIA_UPLOAD_SIZE_BYTES,
-  tooLargeMessage: 'File exceeds the 8MB upload limit',
+  tooLargeMessage: 'File exceeds the 2 MB upload limit',
 });
 
 const router = Router();
