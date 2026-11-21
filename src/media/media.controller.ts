@@ -15,8 +15,13 @@ import {
 } from '@imagekit/nodejs';
 import { ImageKitService } from '../imagekit/imagekit.service';
 import {
+  GALLERY_TOO_LARGE_MESSAGE,
   MAX_MEDIA_UPLOAD_SIZE_BYTES,
   SVG_SANITIZE_REJECTION_MESSAGE,
+  UNCOMPRESSED_GALLERY_MESSAGE,
+  hasCompressedFilenameMarker,
+  isGalleryAssetType,
+  maxUploadBytesForAssetType,
   sanitizeSvgContent,
 } from './image-upload-policy';
 import {
@@ -114,6 +119,36 @@ export class MediaController {
         res.status(413).json({
           success: false,
           message: 'File exceeds the 2 MB upload limit',
+        });
+        return;
+      }
+
+      // Product/combo images are compressed to ~900 KB by the admin, so anything
+      // over 1.2 MB is an original that bypassed the client. Multer's 2 MB limit
+      // above cannot see assetType; this is where the stricter ceiling lives.
+      if (actualByteSize > maxUploadBytesForAssetType(assetType)) {
+        console.warn('[media-upload] Refused oversized gallery image', {
+          assetType,
+          bytes: actualByteSize,
+          maxBytes: maxUploadBytesForAssetType(assetType),
+        });
+        res.status(413).json({
+          success: false,
+          message: GALLERY_TOO_LARGE_MESSAGE,
+        });
+        return;
+      }
+
+      // TEMPORARY tripwire for stale admin builds — see COMPRESSED_FILENAME_MARKER.
+      if (isGalleryAssetType(assetType) && !hasCompressedFilenameMarker(file.originalname)) {
+        console.warn('[media-upload] Refused gallery image without the optimizer marker', {
+          assetType,
+          originalname: file.originalname,
+          bytes: actualByteSize,
+        });
+        res.status(400).json({
+          success: false,
+          message: UNCOMPRESSED_GALLERY_MESSAGE,
         });
         return;
       }

@@ -52,6 +52,10 @@ import {
 } from '../src/middleware/upload-validator.middleware';
 import {
     MAX_MEDIA_UPLOAD_SIZE_BYTES,
+    MAX_GALLERY_UPLOAD_SIZE_BYTES,
+    GALLERY_TOO_LARGE_MESSAGE,
+    UNCOMPRESSED_GALLERY_MESSAGE,
+    hasCompressedFilenameMarker,
     MEDIA_IMAGE_MIME_ALLOWLIST,
     MIME_TO_EXTENSION,
     BRAND_LOGO_MIME_ALLOWLIST,
@@ -1197,6 +1201,95 @@ const main = async (): Promise<void> => {
             'CONTROL: the identical bytes ARE accepted once the field names brand-logo',
             namedAssetType.status === 201 && dataOf(namedAssetType.body).mimeType === 'image/svg+xml',
             `${namedAssetType.status} ${namedAssetType.text.slice(0, 100)}`
+        );
+
+        /* ── Gallery (product/combo): 1.2 MB ceiling + optimizer-name tripwire ── */
+        section('Gallery uploads: 1.2 MB ceiling and the -optimized failsafe');
+
+        check(
+            'the gallery ceiling is exactly Math.floor(1.2 MB) and stays below the 2 MB route ceiling',
+            MAX_GALLERY_UPLOAD_SIZE_BYTES === Math.floor(1.2 * 1024 * 1024) &&
+                MAX_GALLERY_UPLOAD_SIZE_BYTES < MAX_MEDIA_UPLOAD_SIZE_BYTES,
+            String(MAX_GALLERY_UPLOAD_SIZE_BYTES)
+        );
+
+        // 1.6 MB: the size of the stale-build original that reached ImageKit.
+        const overGallery = Buffer.concat([JPEG_BYTES, filler(1_637_215 - JPEG_BYTES.length)]);
+        const atGallery = Buffer.concat([JPEG_BYTES, filler(MAX_GALLERY_UPLOAD_SIZE_BYTES - JPEG_BYTES.length)]);
+
+        for (const assetType of ['product', 'combo'] as const) {
+            const field = [{ name: 'assetType', value: assetType }];
+
+            const oversized = await uploadProbe(routePort, {
+                bytes: overGallery,
+                filename: 'photo-optimized.jpg',
+                declaredType: 'image/jpeg',
+                extraFields: field,
+            });
+            check(
+                `${assetType}: a 1.6 MB file is refused with 413 even when named -optimized`,
+                oversized.status === 413 && envelopeOf(oversized.body).message === GALLERY_TOO_LARGE_MESSAGE,
+                `${oversized.status} ${oversized.text.slice(0, 120)}`
+            );
+
+            const atLimit = await uploadProbe(routePort, {
+                bytes: atGallery,
+                filename: 'photo-optimized.jpg',
+                declaredType: 'image/jpeg',
+                extraFields: field,
+            });
+            check(
+                `${assetType}: a file exactly at 1.2 MB named -optimized is accepted`,
+                atLimit.status === 201,
+                `${atLimit.status} ${atLimit.text.slice(0, 120)}`
+            );
+
+            const unmarked = await uploadProbe(routePort, {
+                bytes: JPEG_BYTES,
+                filename: 'photo.jpg',
+                declaredType: 'image/jpeg',
+                extraFields: field,
+            });
+            check(
+                `${assetType}: a small file WITHOUT -optimized in its name is refused (tripwire)`,
+                unmarked.status === 400 && envelopeOf(unmarked.body).message === UNCOMPRESSED_GALLERY_MESSAGE,
+                `${unmarked.status} ${unmarked.text.slice(0, 120)}`
+            );
+
+            const marked = await uploadProbe(routePort, {
+                bytes: WEBP_BYTES,
+                filename: 'IMG_2048-optimized.webp',
+                declaredType: 'image/webp',
+                extraFields: field,
+            });
+            check(
+                `${assetType}: a small file named like the admin optimizer output is accepted`,
+                marked.status === 201,
+                `${marked.status} ${marked.text.slice(0, 120)}`
+            );
+        }
+
+        for (const assetType of ['campaign', 'article', 'hero-slide'] as const) {
+            const other = await uploadProbe(routePort, {
+                bytes: overGallery,
+                filename: 'poster.jpg',
+                declaredType: 'image/jpeg',
+                extraFields: [{ name: 'assetType', value: assetType }],
+            });
+            check(
+                `${assetType}: keeps the 2 MB ceiling and needs no -optimized name (1.6 MB poster.jpg accepted)`,
+                other.status === 201,
+                `${other.status} ${other.text.slice(0, 120)}`
+            );
+        }
+
+        check(
+            'hasCompressedFilenameMarker looks at the base name, not the extension or directories',
+            hasCompressedFilenameMarker('a-optimized.webp') &&
+                hasCompressedFilenameMarker('A-OPTIMIZED.JPG') &&
+                !hasCompressedFilenameMarker('photo.jpg') &&
+                !hasCompressedFilenameMarker('-optimized/photo.jpg'),
+            'marker detection drifted'
         );
     } finally {
         routeProbe.close();
