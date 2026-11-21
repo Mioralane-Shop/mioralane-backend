@@ -64,6 +64,45 @@ export const MIME_TO_EXTENSION: Record<SupportedImageMimeType, string> = {
 /** Ceiling for `POST /api/media/images`. Enforced by multer and re-checked by the controller. */
 export const MAX_MEDIA_UPLOAD_SIZE_BYTES = 2 * 1024 * 1024;
 
+/**
+ * Stricter ceiling for gallery images (`product`, `combo`): 1.2 MB, the same
+ * `Math.floor(1.2 * 1024 * 1024)` the admin's `MAX_UPLOAD_SIZE_BYTES` uses.
+ *
+ * The admin compresses these to ~900 KB before sending, so anything above this
+ * is an uncompressed original that slipped past the client (a stale admin
+ * build did exactly that with a 1.6 MB file). Multer cannot apply it — it reads
+ * the file before it knows the `assetType` — so the controller enforces it.
+ */
+export const MAX_GALLERY_UPLOAD_SIZE_BYTES = Math.floor(1.2 * 1024 * 1024);
+
+export const GALLERY_TOO_LARGE_MESSAGE = 'File exceeds the 1.2 MB upload limit for product and combo images';
+
+const GALLERY_ASSET_TYPES: readonly MediaAssetType[] = ['product', 'combo'];
+
+export const isGalleryAssetType = (assetType: MediaAssetType): boolean =>
+  GALLERY_ASSET_TYPES.includes(assetType);
+
+/** Per-asset-type upload ceiling. Never above {@link MAX_MEDIA_UPLOAD_SIZE_BYTES}. */
+export const maxUploadBytesForAssetType = (assetType: MediaAssetType): number =>
+  isGalleryAssetType(assetType) ? MAX_GALLERY_UPLOAD_SIZE_BYTES : MAX_MEDIA_UPLOAD_SIZE_BYTES;
+
+/**
+ * TEMPORARY failsafe: gallery uploads must carry the admin optimizer's name
+ * marker (`createOptimizedName` in `mioralane-admin/lib/image-optimizer.ts`
+ * always produces `<base>-optimized.<ext>`).
+ *
+ * This is a tripwire for an outdated admin build, NOT a security control — the
+ * file name is client-supplied and trivially spoofable. The size ceiling above
+ * is the real backstop. Remove once every deployed admin build compresses.
+ */
+export const COMPRESSED_FILENAME_MARKER = '-optimized';
+
+export const UNCOMPRESSED_GALLERY_MESSAGE =
+  'Product and combo images must be compressed by the admin panel before upload. Refresh the admin and try again.';
+
+export const hasCompressedFilenameMarker = (originalname: string): boolean =>
+  path.parse(originalname).name.toLowerCase().includes(COMPRESSED_FILENAME_MARKER);
+
 /** PNG: the full 8-byte signature, so a partial match cannot pass. */
 const PNG_SIGNATURE: readonly number[] = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
 
